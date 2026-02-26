@@ -27,6 +27,7 @@ export interface ActionCardData {
         followers_increase?: string;
         engagement_increase?: string;
         sales_increase?: string;
+        metric?: string;
         confidence_level: string;
     };
 

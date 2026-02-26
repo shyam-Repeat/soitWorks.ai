@@ -146,9 +146,10 @@ export const ActionCard: React.FC<ActionCardProps> = ({ card, onAction, onSave, 
                         <div className="text-right">
                             <p className="text-[10px] font-black text-zinc-600 uppercase mb-0.5">Expectation</p>
                             <p className="text-xs font-black text-emerald-400">
-                                {card.expected_result.followers_increase ? `+${card.expected_result.followers_increase} Followers` :
-                                    card.expected_result.engagement_increase ? `+${card.expected_result.engagement_increase} Engagement` :
-                                        card.expected_result.sales_increase ? `+${card.expected_result.sales_increase} Sales` : 'Impact Grade A'}
+                                {card.expected_result.metric ? card.expected_result.metric :
+                                    card.expected_result.followers_increase ? `+${card.expected_result.followers_increase} Followers` :
+                                        card.expected_result.engagement_increase ? `+${card.expected_result.engagement_increase} Engagement` :
+                                            card.expected_result.sales_increase ? `+${card.expected_result.sales_increase} Sales` : 'Impact Grade A'}
                             </p>
                         </div>
                         <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center shrink-0 border border-emerald-500/20">

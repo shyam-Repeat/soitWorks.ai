@@ -67,7 +67,6 @@ async function callAI(prompt: string): Promise<any> {
     if (!res.ok) {
       const errText = await res.text();
       console.warn(`HF Router error (${res.status}): ${errText.substring(0, 200)}`);
-      // Fall through to fallback
     } else {
       const data: any = await res.json();
       let txt: string = data.choices?.[0]?.message?.content || "{}";
@@ -81,7 +80,7 @@ async function callAI(prompt: string): Promise<any> {
 }
 
 // ─── Compute a basic fallback dashboard from raw post data ───────────────────
-function computeBasicInsights(summaryData: any[]) {
+function computeBasicInsights(summaryData: any[], followers: number = 0) {
   const total = summaryData.length;
   if (total === 0) return {};
 
@@ -89,16 +88,54 @@ function computeBasicInsights(summaryData: any[]) {
   const avgComments = Math.round(summaryData.reduce((s, p) => s + p.comments_count, 0) / total);
   const avgViews = Math.round(summaryData.reduce((s, p) => s + p.view_count, 0) / total);
 
-  // Engagement = (likes + comments*2) / max(views, 1)
+  // Buyer Intent detection
+  const BUYER_INTENT_KEYWORDS = ["price", "pp", "cost", "how much", "rate", "available", "dm", "where", "buy", "shop", "whatsapp", "contact", "booking"];
+  let totalBuyerIntentComments = 0;
+  let totalFilteredComments = 0;
+
+  summaryData.forEach(p => {
+    if (p.latest_comments) {
+      p.latest_comments.forEach((c: any) => {
+        totalFilteredComments++;
+        const text = (c.text || "").toLowerCase();
+        if (BUYER_INTENT_KEYWORDS.some(k => text.includes(k))) totalBuyerIntentComments++;
+      });
+    }
+  });
+
+  const buyerIntentScore = totalFilteredComments > 0
+    ? Math.round((totalBuyerIntentComments / totalFilteredComments) * 100)
+    : 0;
+
+  // Engagement Rate (Follower based if available, else View based)
+  let engRate = "0.00%";
+  let rawEngRate = 0;
+  if (followers > 0) {
+    rawEngRate = ((avgLikes + avgComments) / followers) * 100;
+    engRate = `${rawEngRate.toFixed(2)}%`;
+  } else if (avgViews > 0) {
+    rawEngRate = ((avgLikes + avgComments) / avgViews) * 100;
+    engRate = `${rawEngRate.toFixed(2)}%`;
+  }
+
+  // Account Score calculation (Weighted)
+  const engagementScoreFinal = Math.min(100, Math.round(rawEngRate * 10)); // normalized
+  const viewScore = Math.min(100, Math.round(avgViews / 200)); // slightly more sensitive scaling
+  const accountScoreFinal = Math.min(100, Math.round(
+    (engagementScoreFinal * 0.4) +
+    (viewScore * 0.3) +
+    (buyerIntentScore * 0.3)
+  ));
+
   const scored = summaryData.map(p => ({
     ...p,
     eng: (p.like_count + p.comments_count * 2) / Math.max(p.view_count, 1),
   }));
   scored.sort((a, b) => b.eng - a.eng);
 
-  const engRate = avgViews > 0
-    ? `${(((avgLikes + avgComments) / avgViews) * 100).toFixed(2)}%`
-    : "N/A";
+  // Viral check
+  const viralPostsCount = summaryData.filter(p => p.view_count > (avgViews * 1.5)).length;
+  const viralPotential = Math.min(100, Math.round((viralPostsCount / total) * 100) + 20);
 
   // Best posting hour
   const hourCounts: Record<number, number> = {};
@@ -108,19 +145,22 @@ function computeBasicInsights(summaryData: any[]) {
       hourCounts[h] = (hourCounts[h] || 0) + 1;
     }
   });
-  const bestHour = Object.entries(hourCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "12";
+  const sortedHours = Object.entries(hourCounts).sort((a, b) => b[1] - a[1]);
+  const bestHourFinal = sortedHours[0]?.[0] ?? "12";
 
   // Top hashtags
   const hashtagCount: Record<string, number> = {};
   summaryData.forEach(p => (p.hashtags || []).forEach((h: string) => { hashtagCount[h] = (hashtagCount[h] || 0) + 1; }));
-  const topHashtags = Object.entries(hashtagCount).sort((a, b) => b[1] - a[1]).slice(0, 5).map(e => e[0]);
+  const topHashtagsFinal = Object.entries(hashtagCount).sort((a, b) => b[1] - a[1]).slice(0, 5).map(e => e[0]);
 
   return {
-    _computed: true,  // flag so frontend knows this is math-only
+    _computed: true,
+    account_score: accountScoreFinal,
+    buyer_intent_score: buyerIntentScore,
     dashboard: {
       growth_score: Math.min(100, Math.round((avgLikes / 500) * 100)),
       engagement_rate_avg: engRate,
-      viral_potential_score: Math.min(100, Math.round((avgViews / Math.max(avgLikes, 1)) * 1.5)),
+      viral_potential_score: viralPotential,
       best_performing_post: scored[0] || {},
       worst_performing_post: scored[scored.length - 1] || {},
     },
@@ -129,8 +169,16 @@ function computeBasicInsights(summaryData: any[]) {
       avg_likes: avgLikes,
       avg_comments: avgComments,
       avg_views: avgViews,
-      top_hashtags: topHashtags,
-      best_hour: `${bestHour}:00`,
+      top_hashtags: topHashtagsFinal,
+      best_hour: `${bestHourFinal}:00`,
+    },
+    next_post_plan: {
+      topic: scored[0]?.topic || "Trending Topic",
+      type: scored[0]?.type || "Video",
+      time: `${bestHourFinal}:00`,
+      hook: "Ready-to-use hook matching your top-performing style.",
+      music: "Trending audio in your niche",
+      cta: buyerIntentScore > 15 ? "DM for pricing details" : "Follow for daily inspiration"
     },
     advanced_analysis: {
       post_classifications: scored.map((p, i) => ({
@@ -138,20 +186,11 @@ function computeBasicInsights(summaryData: any[]) {
         tier: i < Math.ceil(total * 0.25) ? "viral" : i < Math.ceil(total * 0.75) ? "average" : "poor",
       })),
       growth_opportunities: [
-        `Post around ${bestHour}:00 for best engagement.`,
-        `Top hashtags: ${topHashtags.slice(0, 3).join(", ") || "N/A"}`,
-        `Average views: ${avgViews.toLocaleString()} — aim for consistency first.`,
+        `Optimal Posting: Post around ${bestHourFinal}:00 for maximum reach.`,
+        `Hashtag Strategy: Your best tags include ${topHashtagsFinal.slice(0, 2).join(", ") || "niche specific tags"}.`,
+        `Monetization: ${buyerIntentScore}% buyer intent detected. Use clear shopping CTAs.`,
       ],
     },
-    reel_suggestions: [
-      {
-        title: "Content Strategy Insight",
-        hook: "Here's what your top posts have in common...",
-        duration: "15-30s",
-        hashtags: topHashtags,
-        why_it_works: "Based purely on engagement patterns. Run AI analysis for deeper suggestions.",
-      }
-    ],
     action_cards: [
       {
         id: "fallback_1",
@@ -159,25 +198,25 @@ function computeBasicInsights(summaryData: any[]) {
         title: "Optimal Posting Window",
         priority: "medium",
         confidence_score: 85,
-        trigger: `Your engagement peaks between ${bestHour}:00 and ${Number(bestHour) + 2}:00.`,
-        action: { primary: `Schedule your next 3 posts at exactly ${bestHour}:00.` },
-        ready_to_copy: { hook: "Timing is everything. Testing out a new posting schedule today!", caption: "Engagement is highest when you post at the right time. What time is it where you are?", cta: "Comment your timezone below!" },
-        post_time: { date: "Today", time: `${bestHour}:00` },
-        expected_result: { engagement_increase: "15%+", confidence_level: "High" },
-        meta: { difficulty: "Easy", estimated_time_to_create: "5 minutes", impact_score: 7, urgency_score: 9 }
+        trigger: `Your engagement peaks between ${bestHourFinal}:00 and ${Number(bestHourFinal) + 2}:00.`,
+        action: { primary: `Schedule your next 3 posts at exactly ${bestHourFinal}:00.` },
+        ready_to_copy: { hook: "Timing is everything!", caption: "Engagement is highest when you post at the right time. What time is it where you are?", cta: "Comment your timezone below!" },
+        post_time: { date: "Today", time: `${bestHourFinal}:00` },
+        expected_result: { metric: "+15% engagement", confidence_level: "High" },
+        meta: { difficulty: "Easy", estimated_time_to_create: "2m", impact_score: 7, urgency_score: 9 }
       },
       {
-        id: "fallback_2",
-        type: "growth",
-        title: "Hashtag Optimization",
+        id: "buyer_intent_card",
+        type: "sales",
+        title: "🔥 High Intent detected",
         priority: "high",
-        confidence_score: 90,
-        trigger: `Your top performing posts use these specific tags: ${topHashtags.slice(0, 3).join(", ")}.`,
-        action: { primary: "Create a 'Saved' hashtag group with your winners.", secondary: "Mix 3 niche tags with 2 broad tags." },
-        ready_to_copy: { hook: "Struggling with reach? These tags changed the game for me.", caption: "It's not just about what you post, it's about who sees it.", cta: "Save this tag list for later!" },
-        post_time: { date: "Tomorrow", time: "18:00" },
-        expected_result: { followers_increase: "+5-10%", confidence_level: "Medium" },
-        meta: { difficulty: "Medium", estimated_time_to_create: "10 minutes", impact_score: 8, urgency_score: 6 }
+        confidence_score: 95,
+        trigger: `${buyerIntentScore}% of recent comments ask about price/availability.`,
+        action: { primary: "Add 'DM for details' to your high-intent posts.", secondary: "Pin a comment with pricing info." },
+        ready_to_copy: { hook: "Lots of questions about this lately!", caption: "Since so many of you were asking about this piece, I've added all the details to the link in my bio.", cta: "DM me for a direct link!" },
+        post_time: { date: "Today", time: "ASAP" },
+        expected_result: { metric: "+20% conversion", confidence_level: "High" },
+        meta: { difficulty: "Easy", estimated_time_to_create: "1m", impact_score: 9, urgency_score: 10 }
       }
     ]
   };
@@ -199,16 +238,16 @@ async function startServer() {
     try {
       const client = new ApifyClient({ token: process.env.APIFY_API_TOKEN });
 
-      // ── STEP 1: Scrape 10 latest posts + reels ──────────────────────────
-      console.log(`[Apify] Scraping posts for: ${username}`);
+      // ── STEP 1: Scrape latest posts + reels with comments ─────────────────
+      console.log(`[Apify] Scraping data for: ${username}`);
       const run = await client.actor("apify/instagram-scraper").call({
         directUrls: [`https://www.instagram.com/${username}/`],
         resultsType: "posts",
-        resultsLimit: 10,
-        addParentData: false,
+        resultsLimit: 12,
+        commentsLimit: 30, // Increased for better buyer intent detection
+        addParentData: true,
       });
 
-      console.log(`[Apify] Run done. Dataset: ${run.defaultDatasetId}`);
       const { items } = await client.dataset(run.defaultDatasetId).listItems();
 
       if (!items || items.length === 0) {
@@ -219,15 +258,22 @@ async function startServer() {
         });
       }
 
-      // ── STEP 2: Normalize posts ─────────────────────────────────────────
+      // Profile extraction
+      const first: any = items[0];
+      const pInfo = first?.owner || first?.user || {};
+      const fCount = pInfo.followersCount || pInfo.followers || 0;
+
+      // ── STEP 2: Normalize and Enhance ────────────────────────────────────
       const normalizedPosts = items.map((item: any) => ({
         ...item,
-        likesCount: item.likesCount ?? item.likes ?? item.like_count ?? 0,
-        commentsCount: item.commentsCount ?? item.comments ?? item.comment_count ?? 0,
-        videoViewCount: item.videoViewCount ?? item.videoPlayCount ?? item.views ?? item.video_view_count ?? 0,
+        likesCount: item.likesCount ?? item.likes ?? 0,
+        commentsCount: item.commentsCount ?? item.comments ?? 0,
+        videoViewCount: item.videoViewCount ?? item.videoPlayCount ?? item.views ?? 0,
         displayUrl: item.displayUrl || item.thumbnailUrl || item.previewUrl || item.url,
         type: item.type || (item.isVideo ? "Video" : "Image"),
         timestamp: item.timestamp ?? item.taken_at_timestamp,
+        music_info: item.musicArtist ? `${item.musicArtist} - ${item.musicName}` : null,
+        tagged_users: (item.taggedUsers || []).map((u: any) => u.username),
       }));
 
       const summaryData = normalizedPosts.map((item: any) => ({
@@ -235,34 +281,47 @@ async function startServer() {
         like_count: item.likesCount,
         comments_count: item.commentsCount,
         view_count: item.videoViewCount,
-        save_count: item.saveCount ?? 0,
-        share_count: item.shareCount ?? 0,
         timestamp: item.timestamp,
-        caption: (item.caption || "").substring(0, 200),
+        caption: (item.caption || "").substring(0, 300),
+        hook_text: (item.caption || "").split("\n")[0].substring(0, 80),
         hashtags: item.hashtags || [],
         duration: item.videoDuration || 0,
+        music: item.music_info,
+        tagged_users: item.tagged_users,
+        is_collab: item.tagged_users.length > 0,
+        latest_comments: (item.latestComments || []).map((c: any) => ({ text: c.text })),
       }));
 
-      // ── STEP 3: Compute instant math-based dashboard ─────────────────────
-      const basicInsights = computeBasicInsights(summaryData);
-      console.log(`[Data] Computed basic dashboard for ${summaryData.length} posts.`);
+      // ── STEP 3: Basic Baseline Dashboard ────────────────────────────────
+      const basicInsights = computeBasicInsights(summaryData, fCount);
+      console.log(`[Data] Computed baseline with ${fCount} followers.`);
 
-      // ── STEP 4: AI Analysis (best-effort, fallback to math dashboard) ────
+      // ── STEP 4: AI Strategic Analysis ───────────────────────────────────
       let aiInsights: any = null;
-      console.log("[AI] Starting AI analysis...");
+      console.log("[AI] Starting Algorithm v2 analysis...");
 
-      const prompt = `You are an expert Instagram growth analyst. Analyze the following data and return a structured JSON object.
+      const prompt = `You are CORTEX.AI, a Social Intelligence Engine. Analyze using MAXIMUM INSIGHT Algorithm v2.
 
-DATA (${summaryData.length} recent posts/reels):
+ACCOUNT: Followers ${fCount}
+
+DATA:
 ${JSON.stringify(summaryData, null, 2)}
 
-Return ONLY a valid JSON object with this exact structure:
+ALGORITHM v2 TASKS:
+1. Buyer Intent: detected ${basicInsights.buyer_intent_score}% in baseline. Identify WHICH topics attract buyers.
+2. Hook Analysis: Find why the best post hook ("${basicInsights.dashboard.best_performing_post.hook_text || "N/A"}") worked.
+3. Viral Signals: Identify patterns in posts exceeding ${basicInsights.account_summary.avg_views * 1.5} views.
+4. Posting Plan: Recommend a specific content gap to fill.
+
+Return JSON:
 {
+  "account_score": 0-100,
+  "buyer_intent_score": 0-100,
   "dashboard": {
-    "growth_score": <0-100>,
-    "engagement_rate_avg": "<X.XX%>",
-    "viral_potential_score": <0-100>,
-    "best_performing_post": { "like_count": 0, "view_count": 0, "caption": "" },
+    "growth_score": 0-100,
+    "engagement_rate_avg": "X.XX%",
+    "viral_potential_score": 0-100,
+    "best_performing_post": { "like_count": 0, "view_count": 0, "caption": "", "hook_text": "" },
     "worst_performing_post": { "like_count": 0, "view_count": 0, "caption": "" }
   },
   "account_summary": {
@@ -273,42 +332,44 @@ Return ONLY a valid JSON object with this exact structure:
     "top_hashtags": [],
     "best_hour": ""
   },
+  "next_post_plan": {
+    "topic": "Strategic topic",
+    "type": "Video | Image",
+    "time": "HH:MM",
+    "hook": "Full hook line",
+    "music": "Music strategy",
+    "collab": true,
+    "cta": "Heavy-hitting CTA"
+  },
   "advanced_analysis": {
     "post_classifications": [{ "type": "", "tier": "viral|average|poor", "engagement_score": 0 }],
-    "growth_opportunities": ["<actionable insight 1>", "<actionable insight 2>", "<actionable insight 3>"]
+    "growth_opportunities": ["3 expert observations"]
   },
-  "reel_suggestions": [
-    { "title": "", "hook": "", "duration": "", "hashtags": [], "why_it_works": "" }
-  ],
   "action_cards": [
     {
       "id": "string",
       "type": "growth | sales | engagement | opportunity | warning",
-      "title": "string",
+      "title": "Clear Heading",
       "priority": "high | medium | low",
-      "confidence_score": 0-100,
-      "trigger": "A description of what happened in the data that triggered this card",
-      "action": { "primary": "What to do", "secondary": "Optional detail" },
-      "ready_to_copy": { "hook": "The first sentence/line", "caption": "The main body", "cta": "Call to action" },
-      "post_time": { "date": "Tomorrow | Today | Day of Week", "time": "HH:MM (24h format)" },
-      "expected_result": { "followers_increase": "+X%", "confidence_level": "High | Medium" },
-      "meta": { "difficulty": "Easy | Medium | Hard", "estimated_time_to_create": "X minutes", "impact_score": 1-10, "urgency_score": 1-10 }
+      "confidence_score": 90-100,
+      "trigger": "Data-backed reason",
+      "action": { "primary": "What to do", "secondary": "Why it's smart" },
+      "ready_to_copy": { "hook": "Line 1", "caption": "Body", "cta": "CTA" },
+      "post_time": { "date": "Tomorrow", "time": "HH:MM" },
+      "expected_result": { "metric": "+X% growth | sales", "confidence_level": "High" },
+      "meta": { "difficulty": "Easy", "estimated_time_to_create": "5m", "impact_score": 1-10, "urgency_score": 1-10 }
     }
   ]
 }
 
-REQUIRED: Provide 3-5 action_cards.
-No markdown, no explanation. JSON only.`;
+REQUIRED: 4-6 action_cards. JSON ONLY.`;
 
       try {
         aiInsights = await callAI(prompt);
-        console.log("[AI] Analysis complete.");
       } catch (aiErr: any) {
-        console.warn("[AI] Failed, falling back to computed insights:", aiErr.message);
-        aiInsights = null;
+        console.warn("[AI] Failed, using fallback:", aiErr.message);
       }
 
-      // Return posts + best available insights
       return res.json({
         posts: normalizedPosts,
         insights: aiInsights ?? basicInsights,
@@ -320,7 +381,7 @@ No markdown, no explanation. JSON only.`;
       return res.status(500).json({
         error: "Analysis failed",
         details: error.message,
-        suggestion: "Please verify your API keys and try again.",
+        suggestion: "Verify API keys and try again.",
       });
     }
   });
