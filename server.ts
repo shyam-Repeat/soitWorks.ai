@@ -5,7 +5,6 @@ import path from "path";
 import fs from "fs";
 import dotenv from "dotenv";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import Groq from "groq-sdk";
 
 dotenv.config();
 
@@ -18,66 +17,62 @@ const brain = loadFile("src/brain.md");
 const instruction = loadFile("src/instruction.md");
 const analysis = loadFile("src/analysis_instruction.md");
 
-// ─── AI call helper: tries providers in order ────────────────────────────────
-async function callAI(prompt: string): Promise<any> {
-  const hfKey = process.env.HF_TOKEN || process.env.HF_API_KEY || "";
+const MODES_DIR = path.resolve("modes");
+const loadedModes: { filename: string, typeDesc: string, content: string }[] = [];
 
-  // 1. Gemini
-  if (process.env.GEMINI_API_KEY) {
-    console.log("AI Provider: Gemini");
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+try {
+  const files = fs.readdirSync(MODES_DIR).filter(f => f.endsWith('.md'));
+  for (const f of files) {
+    const content = loadFile(path.join(MODES_DIR, f));
+    const firstLine = content.split('\n').map(l => l.trim()).find(l => l.startsWith('TYPE:')) || "";
+    const typeDesc = firstLine ? firstLine.replace('TYPE:', '').trim() : f.replace('.md', '');
+    loadedModes.push({ filename: f, typeDesc, content });
+  }
+  console.log(`[System] Loaded ${loadedModes.length} strategy modes.`, loadedModes.map(m => m.filename));
+} catch (e) {
+  console.error("[System] Failed to load modes directory", e);
+}
+
+if (loadedModes.length === 0) {
+  loadedModes.push({ filename: "Lifestyle.md", typeDesc: "General", content: "Default strategy" });
+}
+
+// ─── AI call helper: uses Gemini 2.0 Flash ──────────────────────────────
+async function callAI(prompt: string): Promise<any> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY is not set in environment variables.");
+  }
+
+  console.log(`[AI] Attempting analysis with Gemini API...`);
+
+  try {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({
+      model: "gemini-3-flash-preview"
+    });
+
     const result = await model.generateContent(prompt);
-    let txt = result.response.text();
+    const response = await result.response;
+    let txt = response.text();
+
+    // Standard markdown cleaning (if model ignores JSON mode or fallback needed)
     if (txt.includes("```json")) txt = txt.split("```json")[1].split("```")[0];
     else if (txt.includes("```")) txt = txt.split("```")[1].split("```")[0];
-    return JSON.parse(txt.trim());
-  }
 
-  // 2. Real Groq key (starts with gsk_)
-  if (process.env.GROQ_API_KEY && !process.env.GROQ_API_KEY.startsWith("hf_")) {
-    console.log("AI Provider: Groq (direct)");
-    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-    const completion = await groq.chat.completions.create({
-      messages: [{ role: "user", content: prompt }],
-      model: "llama-3.3-70b-versatile",
-      response_format: { type: "json_object" },
-    });
-    return JSON.parse(completion.choices[0]?.message?.content || "{}");
-  }
-
-  // 3. HF Router → Groq (free HF key, no Groq account needed)
-  if (hfKey) {
-    console.log("AI Provider: HF Router → Groq (llama-3.3-70b)");
-    const res = await fetch("https://router.huggingface.co/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${hfKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "meta-llama/Llama-3.3-70B-Instruct:groq",
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 2048,
-        stream: false,
-      }),
-      signal: AbortSignal.timeout(60000),
-    });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      console.warn(`HF Router error (${res.status}): ${errText.substring(0, 200)}`);
-    } else {
-      const data: any = await res.json();
-      let txt: string = data.choices?.[0]?.message?.content || "{}";
-      if (txt.includes("```json")) txt = txt.split("```json")[1].split("```")[0];
-      else if (txt.includes("```")) txt = txt.split("```")[1].split("```")[0];
-      return JSON.parse(txt.trim());
+    return {
+      data: JSON.parse(txt.trim()),
+      usage: {} // Usage details available in response.usageMetadata if needed
+    };
+  } catch (err: any) {
+    console.error(`[AI] Gemini API failed: ${err.message}`);
+    if (err.message.includes("429")) {
+      throw new Error("Gemini API quota exceeded. Please check your plan or try later.");
     }
+    throw new Error(`AI analysis failed: ${err.message}`);
   }
-
-  throw new Error("No valid AI provider found. Set GEMINI_API_KEY, GROQ_API_KEY, or HF_API_KEY.");
 }
+
 
 // ─── Compute a basic fallback dashboard from raw post data ───────────────────
 function computeBasicInsights(summaryData: any[], followers: number = 0) {
@@ -129,7 +124,9 @@ function computeBasicInsights(summaryData: any[], followers: number = 0) {
 
   const scored = summaryData.map(p => ({
     ...p,
-    eng: (p.like_count + p.comments_count * 2) / Math.max(p.view_count, 1),
+    // Algorithm v3: High-friction signals (comments) are weighted 2.5x
+    // Denominator prioritizes videoViewCount via the view_count fallback chain
+    eng: (p.like_count + (p.comments_count * 2.5)) / Math.max(p.view_count, 1),
   }));
   scored.sort((a, b) => b.eng - a.eng);
 
@@ -217,6 +214,45 @@ function computeBasicInsights(summaryData: any[], followers: number = 0) {
         post_time: { date: "Today", time: "ASAP" },
         expected_result: { metric: "+20% conversion", confidence_level: "High" },
         meta: { difficulty: "Easy", estimated_time_to_create: "1m", impact_score: 9, urgency_score: 10 }
+      },
+      {
+        id: "viral_potential_card",
+        type: "growth",
+        title: "Viral Spark Detected",
+        priority: "high",
+        confidence_score: 88,
+        trigger: `Your last reel exceeded ${avgViews} views by 40%.`,
+        action: { primary: "Replicate the first 3 seconds of your top video.", secondary: "Use same audio-visual sync pattern." },
+        ready_to_copy: { hook: "You guys liked this one so much...", caption: "Part 2 of what you've been asking for! Let's dive deeper into the process.", cta: "Share with someone who needs to see this!" },
+        post_time: { date: "Tomorrow", time: "09:00" },
+        expected_result: { metric: "+30% reach", confidence_level: "Medium" },
+        meta: { difficulty: "Medium", estimated_time_to_create: "15m", impact_score: 10, urgency_score: 8 }
+      },
+      {
+        id: "hashtag_refine_card",
+        type: "opportunity",
+        title: "Hashtag Synergy",
+        priority: "medium",
+        confidence_score: 82,
+        trigger: `Low competition found for #${topHashtagsFinal[0] || 'your niche'}.`,
+        action: { primary: "Update your hashtag stack to prioritize mid-tier tags.", secondary: "Add 3 location-specific tags." },
+        ready_to_copy: { hook: "Finding your tribe online...", caption: "If you're seeing this, you're exactly where you're meant to be. Our community is growing every day!", cta: "Tap the link in bio to join us!" },
+        post_time: { date: "Today", time: "Late Night" },
+        expected_result: { metric: "+12% discovery", confidence_level: "High" },
+        meta: { difficulty: "Easy", estimated_time_to_create: "5m", impact_score: 6, urgency_score: 6 }
+      },
+      {
+        id: "content_gap_card",
+        type: "warning",
+        title: "Consistency Warning",
+        priority: "high",
+        confidence_score: 90,
+        trigger: "Posting frequency has dropped 20% compared to last month.",
+        action: { primary: "Post a simple behind-the-scenes photo today.", secondary: "No heavy editing required." },
+        ready_to_copy: { hook: "Real life check!", caption: "Behind every perfect feed is a lot of messy work. Here's what's happening today in the studio.", cta: "Double tap if you feel this!" },
+        post_time: { date: "Today", time: "ASAP" },
+        expected_result: { metric: "Restore reach", confidence_level: "High" },
+        meta: { difficulty: "Easy", estimated_time_to_create: "1m", impact_score: 8, urgency_score: 10 }
       }
     ]
   };
@@ -227,6 +263,29 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
   app.use(express.json());
+
+  // Image Proxy to bypass Instagram CDN restrictions
+  app.get("/api/image-proxy", async (req, res) => {
+    try {
+      const url = req.query.url as string;
+      if (!url) return res.status(400).send("URL required");
+
+      const response = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "image/webp,image/apng,image/*,*/*;q=0.8"
+        }
+      });
+
+      if (!response.ok) return res.status(response.status).send("Failed to fetch image");
+      res.setHeader("Content-Type", response.headers.get("content-type") || "image/jpeg");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      const buffer = await response.arrayBuffer();
+      res.send(Buffer.from(buffer));
+    } catch {
+      res.status(500).send("Proxy error");
+    }
+  });
 
   app.post("/api/insights", async (req, res) => {
     const { username } = req.body;
@@ -261,7 +320,17 @@ async function startServer() {
       // Profile extraction
       const first: any = items[0];
       const pInfo = first?.owner || first?.user || {};
-      const fCount = pInfo.followersCount || pInfo.followers || 0;
+      const fCount = pInfo.followersCount ?? pInfo.followers ?? first.followersCount ?? 0;
+
+      const userProfile = {
+        username: first.ownerUsername || pInfo.username || username,
+        fullName: first.ownerFullName || pInfo.fullName || "",
+        followersCount: fCount,
+        followingCount: pInfo.followingCount ?? first.followsCount ?? 0,
+        postsCount: pInfo.postsCount ?? first.postsCount ?? items.length,
+        profilePicUrl: first.profilePicUrl || pInfo.profilePicUrl || null,
+        categoryName: [first.businessCategoryName, pInfo.categoryName].find(c => c && typeof c === 'string' && c.toLowerCase() !== 'none') || (first.isBusinessAccount ? "Business" : "Creator"),
+      };
 
       // ── STEP 2: Normalize and Enhance ────────────────────────────────────
       const normalizedPosts = items.map((item: any) => ({
@@ -296,27 +365,92 @@ async function startServer() {
       const basicInsights = computeBasicInsights(summaryData, fCount);
       console.log(`[Data] Computed baseline with ${fCount} followers.`);
 
+      // Stream the first chunk immediately to render initial dashboard
+      res.setHeader("Content-Type", "application/x-ndjson");
+      res.write(JSON.stringify({
+        type: "basic",
+        data: {
+          user: userProfile,
+          posts: normalizedPosts,
+          insights: basicInsights,
+          dev: {
+            summaryData,
+            rawItems: items.length
+          }
+        }
+      }) + "\n");
+
       // ── STEP 4: AI Strategic Analysis ───────────────────────────────────
       let aiInsights: any = null;
-      console.log("[AI] Starting Algorithm v2 analysis...");
+      let aiUsage: any = null;
 
-      const prompt = `You are CORTEX.AI, a Social Intelligence Engine. Analyze using MAXIMUM INSIGHT Algorithm v2.
+      // 1. Detect Mode Dynamically via AI
+      const bio = first?.owner?.biography || first?.user?.biography || "";
+      let selectedModeFilename = "Lifestyle.md";
+
+      const modeListStr = loadedModes.map(m => `{"filename": "${m.filename}", "description": "${m.typeDesc}"}`).join(",\n");
+      const modePrompt = `Match the user to the best strategy playbook.
+User Category: ${userProfile.categoryName}
+User Bio: ${bio}
+User Name: ${userProfile.fullName}
+
+Available Playbooks:
+[
+${modeListStr}
+]
+
+Task: Output JSON with strictly ONE field "filename" containing the exact string of the best matching playbook.
+{ "filename": "example.md" }`;
+
+      try {
+        console.log("[AI] Detecting optimal strategy mode...");
+        const modeAiResult = await callAI(modePrompt);
+        if (modeAiResult.data && modeAiResult.data.filename) {
+          selectedModeFilename = modeAiResult.data.filename;
+        }
+      } catch (e: any) {
+        console.log("[AI] Mode selection failed, using fallback. Error:", e.message);
+      }
+
+      const selectedMode = loadedModes.find(m => m.filename === selectedModeFilename) || loadedModes[0];
+      const modeInstructions = selectedMode.content;
+      console.log(`[AI] Mode dynamically selected: ${selectedMode.filename}`);
+
+      // 2. Prepare Minimal Data for AI (Top 5 Posts)
+      const top5Posts = summaryData
+        .map(p => ({
+          hook_text: p.hook_text || "",
+          view_count: p.view_count || 0,
+          like_count: p.like_count || 0,
+          comments_count: p.comments_count || 0,
+          duration: p.duration || 0,
+          timestamp: p.timestamp || new Date().toISOString(),
+          comments: p.latest_comments.map((c: any) => c.text).filter(Boolean).slice(0, 5)
+        }))
+        .sort((a, b) => b.view_count - a.view_count)
+        .slice(0, 5);
+
+      console.log("[AI] Starting Algorithm v3 analysis with focused data...");
+
+      const prompt = `You are a Social Media Strategy AI. Analyze using MAXIMUM INSIGHT Algorithm v3.
 
 ACCOUNT: Followers ${fCount}
+COMPUTED STATS: Avg Views: ${basicInsights.account_summary.avg_views} | Avg Likes: ${basicInsights.account_summary.avg_likes} | Best Hour: ${basicInsights.account_summary.best_hour}
 
-DATA:
-${JSON.stringify(summaryData, null, 2)}
+TOP 5 POSTS THIS WEEK:
+${JSON.stringify(top5Posts, null, 2)}
 
-ALGORITHM v2 TASKS:
-1. Buyer Intent: detected ${basicInsights.buyer_intent_score}% in baseline. Identify WHICH topics attract buyers.
-2. Hook Analysis: Find why the best post hook ("${basicInsights.dashboard.best_performing_post.hook_text || "N/A"}") worked.
-3. Viral Signals: Identify patterns in posts exceeding ${basicInsights.account_summary.avg_views * 1.5} views.
-4. Posting Plan: Recommend a specific content gap to fill.
+PLAYBOOK:
+${modeInstructions}
+
+TASK: Detect signals and give next actions.
+ALGORITHM v3 JSON REQUIREMENTS:
+Even though you are providing actions based on the playbook, you MUST map your analysis into the following STRICT JSON output structure. Do not output markdown text, ONLY JSON.
 
 Return JSON:
 {
-  "account_score": 0-100,
-  "buyer_intent_score": 0-100,
+  "account_score": 0-100 (Overall health score based on engagement),
+  "buyer_intent_score": 0-100 (Percentage of comments indicating intent to buy/learn more),
   "dashboard": {
     "growth_score": 0-100,
     "engagement_rate_avg": "X.XX%",
@@ -333,56 +467,76 @@ Return JSON:
     "best_hour": ""
   },
   "next_post_plan": {
-    "topic": "Strategic topic",
+    "topic": "Strategic topic based on NICHE and Playbook",
     "type": "Video | Image",
     "time": "HH:MM",
-    "hook": "Full hook line",
+    "hook": "Full hook line variation from Playbook",
     "music": "Music strategy",
     "collab": true,
-    "cta": "Heavy-hitting CTA"
+    "cta": "Heavy-hitting CTA from Playbook"
   },
   "advanced_analysis": {
     "post_classifications": [{ "type": "", "tier": "viral|average|poor", "engagement_score": 0 }],
-    "growth_opportunities": ["3 expert observations"]
+    "growth_opportunities": [
+      "Detail matching playbook signal",
+      "Detail action list from playbook",
+      "Detail hook variation to test"
+    ]
   },
   "action_cards": [
     {
-      "id": "string",
+      "id": "playbook_action_1",
       "type": "growth | sales | engagement | opportunity | warning",
-      "title": "Clear Heading",
-      "priority": "high | medium | low",
-      "confidence_score": 90-100,
-      "trigger": "Data-backed reason",
-      "action": { "primary": "What to do", "secondary": "Why it's smart" },
-      "ready_to_copy": { "hook": "Line 1", "caption": "Body", "cta": "CTA" },
+      "title": "Clear Action Heading from Playbook",
+      "priority": "high",
+      "confidence_score": 90,
+      "trigger": "Signal Detected from Playbook",
+      "action": { "primary": "What to do based on Actions list", "secondary": "Why it's smart" },
+      "ready_to_copy": { "hook": "Suggested Hook Variation", "caption": "Body", "cta": "Playbook CTA" },
       "post_time": { "date": "Tomorrow", "time": "HH:MM" },
-      "expected_result": { "metric": "+X% growth | sales", "confidence_level": "High" },
-      "meta": { "difficulty": "Easy", "estimated_time_to_create": "5m", "impact_score": 1-10, "urgency_score": 1-10 }
+      "expected_result": { "metric": "+X% growth | sales based on Playbook expected win", "confidence_level": "High" },
+      "meta": { "difficulty": "Easy", "estimated_time_to_create": "15m", "impact_score": 9, "urgency_score": 8 }
     }
   ]
 }
 
-REQUIRED: 4-6 action_cards. JSON ONLY.`;
+REQUIRED: EXACTLY 5 high-impact action_cards representing the mapped Playbook strategies. JSON ONLY.`;
 
       try {
-        aiInsights = await callAI(prompt);
+        const aiResult = await callAI(prompt);
+        aiInsights = aiResult.data;
+        aiUsage = aiResult.usage;
       } catch (aiErr: any) {
         console.warn("[AI] Failed, using fallback:", aiErr.message);
       }
 
-      return res.json({
-        posts: normalizedPosts,
-        insights: aiInsights ?? basicInsights,
-        aiUsed: !!aiInsights,
-      });
+      // Stream AI analysis chunk
+      res.write(JSON.stringify({
+        type: "ai",
+        data: {
+          insights: aiInsights ?? basicInsights,
+          aiUsed: !!aiInsights,
+          dev: {
+            prompt: prompt,
+            usage: aiUsage
+          }
+        }
+      }) + "\n");
+
+      return res.end();
 
     } catch (error: any) {
       console.error("[Error]", error);
-      return res.status(500).json({
-        error: "Analysis failed",
-        details: error.message,
-        suggestion: "Verify API keys and try again.",
-      });
+      if (!res.headersSent) {
+        return res.status(500).json({
+          error: "Analysis failed",
+          details: error.message,
+          suggestion: "Verify API keys and try again.",
+        });
+      } else {
+        res.write(JSON.stringify({ type: "error", error: "Analysis failed", details: error.message }) + "\n");
+        return res.end();
+      }
     }
   });
 

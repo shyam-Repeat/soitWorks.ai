@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Loader2, Zap, TrendingUp, Sparkles, Timer, Activity, MessageSquare, Share2, AlertCircle, ArrowRight } from 'lucide-react';
+import { Search, Loader2, Zap, TrendingUp, Sparkles, Timer, Activity, MessageSquare, Share2, AlertCircle, ArrowRight, Terminal, Bug, Code, Eye, EyeOff } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // Amplify Components
@@ -17,7 +17,9 @@ export default function App() {
   const [loadingStage, setLoadingStage] = useState('');
   const [error, setError] = useState<{ message: string; details?: string; suggestion?: string } | null>(null);
   const [data, setData] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'actions' | 'strategy'>('dashboard');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'actions' | 'strategy' | 'dev'>('dashboard');
+  const [devMode, setDevMode] = useState(false);
 
   const handleSearch = async (e: React.FormEvent, overrideUsername?: string) => {
     e.preventDefault();
@@ -46,18 +48,53 @@ export default function App() {
         body: JSON.stringify({ username: targetUsername }),
       });
 
-      const result = await res.json();
-
       if (!res.ok) {
-        throw {
-          message: result.error || 'Identity Verification Failed',
-          details: result.details,
-          suggestion: result.suggestion
-        };
+        const errorText = await res.text();
+        throw new Error(`API Error: ${errorText}`);
       }
 
-      setData(result);
-      setActiveTab('dashboard'); // Default to dashboard on success
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (value) buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (line.trim()) {
+              const chunk = JSON.parse(line);
+              if (chunk.type === "error") {
+                throw new Error(chunk.details || chunk.error);
+              } else if (chunk.type === "basic") {
+                setData(chunk.data);
+                setLoading(false);
+                setActiveTab('dashboard');
+                setAiLoading(true);
+                setLoadingStage('AI analysis in progress...');
+              } else if (chunk.type === "ai") {
+                setData((prev: any) => ({
+                  ...prev,
+                  insights: chunk.data.insights,
+                  aiUsed: chunk.data.aiUsed,
+                  dev: {
+                    ...prev.dev,
+                    prompt: chunk.data.dev.prompt,
+                    usage: chunk.data.dev.usage
+                  }
+                }));
+                setAiLoading(false);
+                setLoadingStage('');
+              }
+            }
+          }
+          if (done) break;
+        }
+      }
     } catch (err: any) {
       console.error("Analysis error:", err);
       setError({
@@ -65,7 +102,6 @@ export default function App() {
         details: err.details || (err instanceof Error ? err.message : String(err)),
         suggestion: err.suggestion || "Ensure target profile is public and retry."
       });
-    } finally {
       setLoading(false);
       setLoadingStage('');
     }
@@ -99,7 +135,7 @@ export default function App() {
         hashtags: ["BridalFashion", "LehengaLove", "WeddingVibes"]
       },
       topPerformer: {
-        imageUrl: bestPost?.displayUrl || "https://images.unsplash.com/photo-1549439602-43ebca2327af?q=80&w=1000",
+        imageUrl: `/api/image-proxy?url=${encodeURIComponent(bestPost?.displayUrl || "https://images.unsplash.com/photo-1549439602-43ebca2327af?q=80&w=1000")}`,
         type: bestPost?.productType === 'reels' ? 'Reel' : 'Post',
         likes: bestPost?.likesCount || 1240,
         views: bestPost?.videoViewCount || 42000,
@@ -110,10 +146,11 @@ export default function App() {
       profile: {
         username: data.user?.username || username,
         fullName: data.user?.fullName || "Amplify User",
-        avatarUrl: data.user?.profilePicUrl,
-        followers: data.user?.followersCount || "12.4K",
-        following: data.user?.followingCount || "842",
-        posts: data.user?.postsCount || posts.length
+        avatarUrl: data.user?.profilePicUrl ? `/api/image-proxy?url=${encodeURIComponent(data.user?.profilePicUrl)}` : undefined,
+        followers: data.user?.followersCount?.toLocaleString() || "12.4K",
+        following: data.user?.followingCount?.toLocaleString() || "842",
+        posts: data.user?.postsCount?.toLocaleString() || posts.length,
+        categoryName: data.user?.categoryName
       },
       actionCards: insights.action_cards || [],
       growthRoadmap: insights.advanced_analysis?.growth_opportunities || [],
@@ -215,18 +252,32 @@ export default function App() {
       {/* Main Dashboard Layout */}
       {data && dashboardData && (
         <main className="max-w-7xl mx-auto px-6 py-8 animate-in fade-in duration-1000">
-          <header className="flex flex-col md:flex-row justify-between items-center mb-12 gap-6">
+          <header className="flex flex-col md:flex-row justify-between items-center mb-6 gap-6">
             <div>
               <h1 className="text-3xl font-black text-white tracking-tighter">AMPLIFY<span className="text-primary">.</span></h1>
               <p className="text-muted text-[10px] font-black uppercase tracking-[0.3em]">Institutional Grade Intelligence</p>
             </div>
+
+            {aiLoading && (
+              <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="flex items-center gap-3 px-4 py-2 bg-primary/20 border border-primary/30 rounded-xl"
+              >
+                <Loader2 size={16} className="text-primary animate-spin" />
+                <span className="text-[10px] font-bold tracking-widest uppercase text-primary/90">
+                  AI Analyzing Patterns...
+                </span>
+              </motion.div>
+            )}
 
             {/* Tab Switcher */}
             <div className="flex bg-white/5 border border-white/10 p-1 rounded-2xl backdrop-blur-xl relative z-10">
               {[
                 { id: 'dashboard', label: 'Dashboard' },
                 { id: 'actions', label: 'Action Cards' },
-                { id: 'strategy', label: 'AI Strategy' }
+                { id: 'strategy', label: 'AI Strategy' },
+                ...(devMode ? [{ id: 'dev', label: 'Dev Mode' }] : [])
               ].map((tab) => (
                 <button
                   key={tab.id}
@@ -246,6 +297,17 @@ export default function App() {
             </div>
 
             <div className="flex gap-4">
+              <button
+                onClick={() => {
+                  const nextMode = !devMode;
+                  setDevMode(nextMode);
+                  if (!nextMode && activeTab === 'dev') setActiveTab('dashboard');
+                }}
+                className={`glass-card p-2 rounded-xl transition-all ${devMode ? 'text-primary border-primary/40' : 'text-white/40'}`}
+                title="Toggle Dev Mode"
+              >
+                {devMode ? <Eye size={18} /> : <EyeOff size={18} />}
+              </button>
               <button onClick={() => { setData(null); setUsername(''); }} className="glass-card px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest text-white/60 hover:text-white transition-colors">
                 New Analysis
               </button>
@@ -317,7 +379,7 @@ export default function App() {
                   {/* Row 3 Activity Strip */}
                   <div className="space-y-4">
                     <h3 className="label-tiny">Real-Time Action Engine</h3>
-                    <ActionStrip />
+                    <ActionStrip cards={dashboardData.actionCards} />
                     <div className="flex justify-center pt-4">
                       <button
                         onClick={() => setActiveTab('actions')}
@@ -432,6 +494,99 @@ export default function App() {
                           <button className="w-full py-4 bg-white text-primary rounded-2xl text-[11px] font-black uppercase tracking-widest hover:shadow-2xl transition-all active:scale-95 relative">
                             Generate PDF Campaign
                           </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'dev' && (
+                <div className="space-y-12 pb-20">
+                  <div className="max-w-6xl mx-auto">
+                    <div className="flex items-center gap-4 mb-12">
+                      <div className="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center border border-primary/20">
+                        <Terminal size={24} className="text-primary" />
+                      </div>
+                      <div>
+                        <h2 className="text-4xl font-black text-white tracking-tighter uppercase">Diagnostic Portal</h2>
+                        <p className="text-muted text-sm font-medium tracking-widest uppercase">Raw Payload Inspection & Neural Cycles</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-8">
+                      {/* Sending to AI Section */}
+                      <div className="glass-card p-8 rounded-3xl border-primary/10">
+                        <div className="flex items-center justify-between mb-6">
+                          <div className="flex items-center gap-3">
+                            <Share2 size={18} className="text-primary" />
+                            <h3 className="text-xl font-bold text-white uppercase tracking-tight">Outgoing Prompt</h3>
+                          </div>
+                          <span className="pill-badge bg-primary/10 text-primary border border-primary/20">Sent to AI</span>
+                        </div>
+                        <div className="bg-[#05070a] rounded-2xl p-6 border border-white/5 overflow-hidden">
+                          <pre className="text-[11px] text-primary/80 font-mono whitespace-pre-wrap leading-relaxed max-h-[400px] overflow-y-auto no-scrollbar">
+                            {data.dev?.prompt}
+                          </pre>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        {/* Apify normalized Data */}
+                        <div className="glass-card p-8 rounded-3xl">
+                          <div className="flex items-center justify-between mb-6">
+                            <div className="flex items-center gap-3">
+                              <Activity size={18} className="text-emerald" />
+                              <h3 className="text-xl font-bold text-white uppercase tracking-tight">Normalized Data</h3>
+                            </div>
+                            <span className="pill-badge bg-emerald/10 text-emerald border border-emerald/20">Apify Data</span>
+                          </div>
+                          <div className="bg-[#05070a] rounded-2xl p-6 border border-white/5 overflow-hidden">
+                            <pre className="text-[11px] text-emerald/80 font-mono whitespace-pre-wrap leading-relaxed max-h-[500px] overflow-y-auto no-scrollbar">
+                              {JSON.stringify(data.dev?.summaryData, null, 2)}
+                            </pre>
+                          </div>
+                        </div>
+
+                        {/* Received from AI Section */}
+                        <div className="glass-card p-8 rounded-3xl">
+                          <div className="flex items-center justify-between mb-6">
+                            <div className="flex items-center gap-3">
+                              <Sparkles size={18} className="text-amber" />
+                              <h3 className="text-xl font-bold text-white uppercase tracking-tight">AI Interpretation</h3>
+                            </div>
+                            <span className="pill-badge bg-amber/10 text-amber border border-amber/20">Received JSON</span>
+                          </div>
+                          <div className="bg-[#05070a] rounded-2xl p-6 border border-white/5 overflow-hidden">
+                            <pre className="text-[11px] text-amber/80 font-mono whitespace-pre-wrap leading-relaxed max-h-[500px] overflow-y-auto no-scrollbar">
+                              {JSON.stringify(data.insights, null, 2)}
+                            </pre>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Meta Context */}
+                      <div className="glass-card p-6 rounded-2xl border-white/5 flex flex-wrap gap-8 items-center justify-center">
+                        <div className="text-center">
+                          <p className="label-tiny mb-1">Raw Items</p>
+                          <p className="text-white font-black">{data.dev?.rawItems || 0}</p>
+                        </div>
+                        <div className="w-px h-8 bg-white/10" />
+                        <div className="text-center">
+                          <p className="label-tiny mb-1">AI Engine</p>
+                          <p className="text-white font-black">{data.aiUsed ? "Active" : "Baseline Fallback"}</p>
+                        </div>
+                        <div className="w-px h-8 bg-white/10" />
+                        <div className="text-center">
+                          <p className="label-tiny mb-1">Algorithm</p>
+                          <p className="text-white font-black">v2.0 Beta</p>
+                        </div>
+                        <div className="w-px h-8 bg-white/10" />
+                        <div className="text-center">
+                          <p className="label-tiny mb-1">Tokens (I/O)</p>
+                          <p className="text-white font-black text-[10px]">
+                            {data.dev?.usage?.promptTokens || data.dev?.usage?.prompt_tokens || 0} / {data.dev?.usage?.completionTokens || data.dev?.usage?.completion_tokens || 0}
+                          </p>
                         </div>
                       </div>
                     </div>

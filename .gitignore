@@ -6,3 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
+.test-gemini.ts 
+.test-models.ts
+test-gemini.ts
+test-models.ts
+src/v3algoritham.md

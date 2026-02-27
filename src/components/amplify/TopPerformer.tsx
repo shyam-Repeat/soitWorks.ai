@@ -25,7 +25,7 @@ export const TopPerformer: React.FC<TopPerformerProps> = ({
             <h3 className="text-sm font-black text-white uppercase tracking-widest mb-6">Top Performer</h3>
 
             <div className="relative aspect-video rounded-xl overflow-hidden mb-6 border border-white/5">
-                <img src={imageUrl} alt="Top Post" className="w-full h-full object-cover" />
+                <img src={imageUrl} alt="Top Post" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                 <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-4 flex justify-between items-end">
                     <span className="pill-badge bg-white/20 text-white backdrop-blur-md border-white/10">
                         {type}

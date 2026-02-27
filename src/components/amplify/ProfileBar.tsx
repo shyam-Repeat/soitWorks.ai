@@ -8,6 +8,7 @@ interface ProfileBarProps {
     followers?: string | number;
     following?: string | number;
     posts?: string | number;
+    categoryName?: string;
     onRefresh?: () => void;
     isLoading?: boolean;
 }
@@ -19,6 +20,7 @@ export const ProfileBar: React.FC<ProfileBarProps> = ({
     followers = "12.4K",
     following = "842",
     posts = "156",
+    categoryName,
     onRefresh,
     isLoading = false
 }) => {
@@ -27,7 +29,7 @@ export const ProfileBar: React.FC<ProfileBarProps> = ({
             <div className="flex items-center gap-4">
                 <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-primary/20 bg-deep-navy">
                     {avatarUrl ? (
-                        <img src={avatarUrl} alt={username} className="w-full h-full object-cover" />
+                        <img src={avatarUrl} alt={username} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                     ) : (
                         <div className="w-full h-full flex items-center justify-center text-primary font-bold">
                             {username[0]?.toUpperCase()}
@@ -35,8 +37,15 @@ export const ProfileBar: React.FC<ProfileBarProps> = ({
                     )}
                 </div>
                 <div>
-                    <h2 className="text-sm font-black text-white leading-none">@{username}</h2>
-                    <p className="text-[10px] text-muted font-medium mt-1">{fullName}</p>
+                    <div className="flex items-center gap-3">
+                        <h2 className="text-sm font-black text-white leading-none">@{username}</h2>
+                        {categoryName && categoryName.toLowerCase() !== 'none' && (
+                            <span className="px-2 py-0.5 rounded-md bg-white/5 text-[9px] font-bold text-white/60 tracking-wider uppercase border border-white/10">
+                                {categoryName}
+                            </span>
+                        )}
+                    </div>
+                    <p className="text-[10px] text-muted font-medium mt-1.5">{fullName}</p>
                 </div>
             </div>
 
