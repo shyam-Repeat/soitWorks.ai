@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Loader2, Zap, TrendingUp, Sparkles, Timer, Activity, MessageSquare, Share2, AlertCircle, ArrowRight, Terminal, Bug, Code, Eye, EyeOff } from 'lucide-react';
+import { Search, Loader2, Zap, TrendingUp, Sparkles, Timer, Activity, MessageSquare, Share2, AlertCircle, ArrowRight, Terminal, Bug, Code, Eye, EyeOff, Save, LogOut, User, Clock, ChevronRight, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // Amplify Components
@@ -11,6 +11,8 @@ import { TopPerformer } from './components/amplify/TopPerformer';
 import { ContentChart } from './components/amplify/ContentChart';
 import { ActionStrip } from './components/amplify/ActionStrip';
 import { ActionCard } from './components/ActionCard';
+import { AuthModal } from './components/AuthModal';
+import { usePocketBase } from './hooks/usePocketBase';
 
 export default function App() {
   const [username, setUsername] = useState('');
@@ -21,13 +23,190 @@ export default function App() {
   const [error, setError] = useState<{ message: string; details?: string; suggestion?: string } | null>(null);
   const [data, setData] = useState<any>(null);
   const [aiLoading, setAiLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'actions' | 'strategy' | 'dev'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'actions' | 'strategy' | 'history' | 'dev'>('dashboard');
   const [devMode, setDevMode] = useState(false);
   const [activeMetric, setActiveMetric] = useState<'likes' | 'comments' | 'views' | 'shares'>('views');
+  const [isFromHistory, setIsFromHistory] = useState(false);
+
+  // Auth state
+  const { user: authUser, token, login, register, logout, error: authError, clearError } = usePocketBase();
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [pendingSave, setPendingSave] = useState(false);
+  const [history, setHistory] = useState<any[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  // Save handler — triggers auth modal if not logged in
+  const handleSave = async () => {
+    if (!authUser || !token) {
+      setPendingSave(true);
+      setShowAuthModal(true);
+      return;
+    }
+    if (!data) return;
+
+    setSaving(true);
+    setSaveSuccess(false);
+    try {
+      const res = await fetch('/api/save', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          profile: data.user,
+          posts: data.posts,
+          insights: data.insights,
+          aiResponse: data.insights,
+        }),
+      });
+      if (!res.ok) throw new Error('Save failed');
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (err) {
+      console.error('Save error:', err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Regenerate Strategy handler
+  const handleRegenerateStrategy = async () => {
+    console.log("[Strategy] Triggered. Data exists:", !!data, "User exists:", !!data?.user, "SummaryData exists:", !!data?.dev?.summaryData);
+
+    if (!data || !data.user) {
+      console.warn("[Strategy] Missing data.user, aborting.");
+      return;
+    }
+
+    // Fallback: if summaryData is missing but posts exist, we can still proceed if the server handles it
+    // but for now let's just log it.
+    if (!data.dev?.summaryData) {
+      console.warn("[Strategy] Missing summaryData. Proceeding with posts as fallback if possible.");
+    }
+
+    setAiLoading(true);
+    setLoadingStage('Architecting New Strategy...');
+    try {
+      const res = await fetch('/api/analyze-existing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userProfile: data.user,
+          summaryData: data.dev?.summaryData,
+          posts: data.posts, // Fallback for history loads
+          playbook: data.insights?.playbook, // If available
+          dryRun: devMode
+        }),
+      });
+
+      if (!res.ok) throw new Error('Regeneration failed');
+      const result = await res.json();
+
+      if (result.dryRun) {
+        setData((prev: any) => ({
+          ...prev,
+          dev: {
+            ...prev.dev,
+            prompt: result.prompt
+          }
+        }));
+        setActiveTab('dev');
+      } else {
+        setData((prev: any) => ({
+          ...prev,
+          insights: result.insights,
+          aiUsed: true
+        }));
+      }
+    } catch (err) {
+      console.error('Regeneration error:', err);
+    } finally {
+      setAiLoading(false);
+      setLoadingStage('');
+    }
+  };
+
+  // After auth modal closes successfully, auto-save if pending
+  const handleAuthModalClose = () => {
+    setShowAuthModal(false);
+    clearError();
+    if (pendingSave && authUser && data) {
+      setPendingSave(false);
+      // Slight delay to let state settle
+      setTimeout(() => handleSave(), 300);
+    }
+  };
+
+  // Load history and auto-populate dashboard if empty
+  const loadHistoryAndPopulate = async () => {
+    if (!token) return;
+    setLoading(true);
+    setLoadingStage('Restoring Intelligence Archive...');
+    setHistoryLoading(true);
+    try {
+      const res = await fetch('/api/history', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const historyData = await res.json();
+        const analyses = historyData.analyses || [];
+        setHistory(analyses);
+
+        // Auto-load latest analysis if no data is currently showing
+        if (!data && analyses.length > 0) {
+          const hasUsableProfile = (record: any) => {
+            const followers = record?.profile?.followers_count ?? record?.insights?.account_summary?.followers ?? 0;
+            const following = record?.profile?.following_count ?? 0;
+            const posts = record?.profile?.posts_count ?? record?.posts?.length ?? 0;
+            const username = record?.ig_username ?? "";
+            return Boolean(username && username !== "unknown") && (followers > 0 || following > 0 || posts > 0);
+          };
+
+          const latest = analyses.find((a: any) => hasUsableProfile(a)) || analyses[0];
+          const historyPosts = Array.isArray(latest.posts) ? latest.posts : [];
+
+          setData({
+            user: {
+              username: latest.ig_username,
+              profilePicUrl: latest.profile_pic_url,
+              fullName: latest.profile?.full_name || latest.insights?.profile?.fullName || "",
+              followersCount: latest.profile?.followers_count ?? latest.insights?.account_summary?.followers ?? 0,
+              followingCount: latest.profile?.following_count ?? latest.insights?.profile?.following ?? 0,
+              postsCount: latest.profile?.posts_count ?? latest.insights?.profile?.posts ?? historyPosts.length ?? 0,
+              categoryName: latest.profile?.category_name || "",
+              biography: latest.profile?.biography || "",
+            },
+            posts: historyPosts,
+            insights: latest.insights,
+            aiUsed: !!latest.ai_response,
+          });
+          setIsFromHistory(true);
+          setActiveTab('dashboard');
+        }
+      }
+    } catch (err) {
+      console.error('History load error:', err);
+    } finally {
+      setHistoryLoading(false);
+      setLoading(false);
+      setLoadingStage('');
+    }
+  };
+
+  // Trigger load on login
+  React.useEffect(() => {
+    if (authUser && token) {
+      loadHistoryAndPopulate();
+    }
+  }, [authUser, token]);
 
   const handleSearch = async (e: React.FormEvent, overrideUsername?: string) => {
     e.preventDefault();
     let targetUsername = (overrideUsername || username).trim();
+    console.log("[Search] Triggered for:", targetUsername, "EnableAI:", enableAI, "DevMode:", devMode);
     if (!targetUsername) return;
 
     // Handle URL pastes
@@ -52,7 +231,8 @@ export default function App() {
         body: JSON.stringify({
           username: targetUsername,
           contentType: contentType,
-          enableAI: enableAI
+          enableAI: enableAI,
+          dryRun: devMode
         }),
       });
 
@@ -199,6 +379,14 @@ export default function App() {
 
   return (
     <div className="min-h-screen font-sans selection:bg-primary/30 selection:text-white pb-12">
+      {/* Auth Modal */}
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={handleAuthModalClose}
+        onLogin={login}
+        onRegister={register}
+        error={authError}
+      />
       {/* Helper Background Animations */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
         <div className="bg-geometric absolute inset-0" />
@@ -217,6 +405,50 @@ export default function App() {
           transition={{ duration: 15, repeat: Infinity, ease: "easeInOut" }}
           className="absolute top-1/2 left-1/4 w-12 h-12 bg-accent opacity-10 rotate-45"
         />
+      </div>
+
+      {/* Persistent Auth/User Bar (Top Right) */}
+      <div className="fixed top-8 right-8 z-[60] flex items-center gap-4">
+        {authUser ? (
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 px-4 py-2 bg-white border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
+              <div className="w-8 h-8 bg-accent border-2 border-black flex items-center justify-center">
+                <User size={16} className="text-black" />
+              </div>
+              <div className="flex flex-col">
+                <span className="text-[10px] font-black uppercase leading-tight tracking-wider">
+                  {authUser.name || authUser.email.split('@')[0]}
+                </span>
+                {activeTab !== 'dashboard' && (
+                  <button
+                    onClick={() => {
+                      setActiveTab('dashboard');
+                      if (data) setIsFromHistory(true);
+                    }}
+                    className="text-[8px] font-black text-black/50 hover:text-accent uppercase tracking-widest text-left transition-colors"
+                  >
+                    View Dashboard
+                  </button>
+                )}
+              </div>
+            </div>
+            <button
+              onClick={logout}
+              className="brutalist-button !p-3.5 !bg-white !text-black hover:!bg-red-500 hover:!text-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
+              title="Logout"
+            >
+              <LogOut size={18} />
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setShowAuthModal(true)}
+            className="brutalist-button !px-6 !py-3 !bg-white !text-black flex items-center gap-2 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] hover:shadow-[10px_10px_0px_0px_rgba(0,0,0,1)]"
+          >
+            <User size={18} />
+            <span className="text-xs font-black uppercase tracking-widest">Login / Join</span>
+          </button>
+        )}
       </div>
 
       {/* Search Overlay (Landing Page) */}
@@ -391,7 +623,7 @@ export default function App() {
           <header className="flex flex-col md:flex-row justify-between items-center mb-12 gap-8 border-b-8 border-black pb-12">
             <div>
               <h1 className="text-5xl font-black text-black tracking-tighter uppercase leading-none">So-It Works.ai<span className="text-accent underline decoration-black decoration-8 underline-offset-8">.</span></h1>
-              <p className="text-black/60 text-[10px] font-black uppercase tracking-[0.4em] mt-4">Institutional Grade Intelligence v3.0</p>
+              <p className="text-black/60 text-[10px] font-black uppercase tracking-[0.4em] mt-4">Social Intelligence AI for Businesses</p>
             </div>
 
             {aiLoading && (
@@ -417,7 +649,9 @@ export default function App() {
               ].map((tab) => (
                 <button
                   key={tab.id}
-                  onClick={() => setActiveTab(tab.id as any)}
+                  onClick={() => {
+                    setActiveTab(tab.id as any);
+                  }}
                   className={`relative px-8 py-3 text-xs font-black uppercase tracking-[0.2em] transition-all z-10 ${activeTab === tab.id ? 'text-black' : 'text-black/60 hover:text-black/80'}`}
                 >
                   {activeTab === tab.id && (
@@ -432,7 +666,47 @@ export default function App() {
               ))}
             </div>
 
-            <div className="flex gap-4">
+            <div className="flex gap-4 items-center">
+              {/* Save Button */}
+              {data && data.user && (
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleRegenerateStrategy}
+                    disabled={aiLoading}
+                    className="brutalist-button !px-6 !py-3 !bg-black !text-white flex items-center gap-2 hover:!bg-accent hover:!text-black transition-all"
+                    title="Regenerate AI Strategy"
+                  >
+                    {aiLoading ? (
+                      <RefreshCw size={16} className="animate-spin" />
+                    ) : (
+                      <Sparkles size={16} />
+                    )}
+                    <span className="text-[10px] font-black uppercase tracking-widest">
+                      {aiLoading ? 'Thinking...' : 'AI Strategy'}
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={handleSave}
+                    disabled={saving}
+                    className={`brutalist-button !px-6 !py-3 flex items-center gap-2 transition-all ${saveSuccess
+                      ? '!bg-emerald-500 !text-white !border-emerald-700'
+                      : '!bg-accent !text-black hover:!shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]'
+                      }`}
+                    title="Save analysis to your account"
+                  >
+                    {saving ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : (
+                      <Save size={16} />
+                    )}
+                    <span className="text-[10px] font-black uppercase tracking-widest">
+                      {saveSuccess ? 'Saved!' : saving ? 'Saving...' : 'Save'}
+                    </span>
+                  </button>
+                </div>
+              )}
+
               <button
                 onClick={() => {
                   const nextMode = !devMode;
@@ -444,7 +718,7 @@ export default function App() {
               >
                 {devMode ? <Eye size={20} /> : <EyeOff size={20} />}
               </button>
-              <button onClick={() => { setData(null); setUsername(''); }} className="brutalist-button !bg-black !text-white hover:!bg-accent hover:!text-black !px-6 !py-3">
+              <button onClick={() => { setData(null); setUsername(''); setActiveTab('dashboard'); setIsFromHistory(false); }} className="brutalist-button !bg-black !text-white hover:!bg-accent hover:!text-black !px-6 !py-3">
                 New Analysis
               </button>
             </div>
@@ -460,6 +734,7 @@ export default function App() {
             >
               {activeTab === 'dashboard' && (
                 <div className="space-y-12">
+
                   {/* Profile Bar */}
                   <ProfileBar
                     {...dashboardData.profile}
@@ -542,7 +817,12 @@ export default function App() {
                       <AccountHealth score={dashboardData.score} metrics={dashboardData.healthMetrics} />
                     </div>
                     <div className="lg:col-span-5">
-                      <NextPostPlan {...dashboardData.nextPlan} onViewStrategy={() => setActiveTab('strategy')} />
+                      <NextPostPlan
+                        {...dashboardData.nextPlan}
+                        niche={dashboardData.profile.categoryName}
+                        isDevMode={devMode}
+                        onViewStrategy={() => setActiveTab('strategy')}
+                      />
                     </div>
                     <div className="lg:col-span-4">
                       <TopPerformer {...dashboardData.topPerformer} />
@@ -673,6 +953,7 @@ export default function App() {
                   </div>
                 </div>
               )}
+
 
               {activeTab === 'dev' && (
                 <div className="space-y-12 pb-20">

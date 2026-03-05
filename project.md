@@ -49,7 +49,7 @@ Directly operationalize data into success:
 - **Environment:** Node.js (TypeScript via `tsx`)
 - **API:** Express
 - **Scraping:** Apify Client (Instagram Scraper Actor)
-- **Database:** Better-SQLite3 for fast, local data persistence
+- **Auth & Database:** PocketBase (user auth, persistent data storage)
 
 ### AI / Large Language Models
 - **Google Gemini 2.0 Flash:** Primary engine for high-speed strategic analysis.

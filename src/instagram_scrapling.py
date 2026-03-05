@@ -202,7 +202,7 @@ def filter_items(items, content_type):
         return [i for i in items if i.get("type") == "Image"]
     return items
 
-def scrape_instagram(username, count=12, cookie_path=None, content_type="all", include_comments=True):
+def scrape_instagram(username, count=15, cookie_path=None, content_type="all", include_comments=True):
     print(f"[Scrapling] Targeting {username} for {count} items...", file=sys.stderr)
     items_map = {}
     last_page_info = {}

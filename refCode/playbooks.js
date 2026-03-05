@@ -170,17 +170,30 @@ const PLAYBOOKS = {
  * @returns {Object} Matching playbook or null
  */
 function detectNiche(account) {
+  const category = account.profile_category || account.categoryName || "";
+  const bio = account.biography || account.bio || "";
+
   const searchText = [
-    String(account.profile_category || ""),
-    String(account.bio || ""),
+    String(category),
+    String(bio),
     String(account.username || ""),
     String(account.full_name || ""),
   ].join(" ").toLowerCase();
 
+  // 1. Precise keyword matching
   for (const [key, playbook] of Object.entries(PLAYBOOKS)) {
     if (playbook.detectionKeywords.some(kw => searchText.includes(kw))) {
       return { nicheKey: key, playbook };
     }
+  }
+
+  // 2. Logic-based detection (fallback)
+  if (searchText.includes("saree") || searchText.includes("silk") || searchText.includes("manufacturer")) {
+    return { nicheKey: "bridal", playbook: PLAYBOOKS["bridal"] };
+  }
+
+  if (searchText.includes("jewel") || searchText.includes("silver") || searchText.includes("gold")) {
+    return { nicheKey: "jewellery", playbook: PLAYBOOKS["jewellery"] };
   }
 
   // Fallback to boutique (most generic fashion)

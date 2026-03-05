@@ -7,6 +7,14 @@ import { scrapeInstagramProfile } from "./src/scraper.js";
 import { scanBuyerIntent } from "./src/utils/buyerIntentScanner.js";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
+// PocketBase
+import { registerUser, loginUser, validateToken } from "./src/lib/pocketbase.js";
+import {
+  saveProfile, savePosts, saveComments, saveAnalysis,
+  getAnalyses, getPostRecordId,
+  type ProfileData, type PostData, type CommentData,
+} from "./src/lib/db.js";
+
 dotenv.config();
 
 // ─── Load instruction markdown files once at startup ─────────────────────────
@@ -22,31 +30,34 @@ const analysis = loadFile("src/analysis_instruction.md");
 import { detectNiche } from "./refCode/playbooks.js";
 
 // ─── AI call helper: uses Gemini 2.0 Flash ──────────────────────────────
-async function callAI(prompt: string): Promise<any> {
+async function callAI(prompt: string, expectJson: boolean = true): Promise<any> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY is not set in environment variables.");
   }
 
-  console.log(`[AI] Attempting analysis with Gemini API...`);
+  console.log(`[AI] Attempting analysis with Gemini API (JSON: ${expectJson})...`);
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
-      model: "gemini-3-flash-preview"
+      model: "gemini-3-flash-preview",
+      generationConfig: expectJson ? { responseMimeType: "application/json" } : undefined
     });
 
     const result = await model.generateContent(prompt);
     const response = await result.response;
     let txt = response.text();
 
-    // Standard markdown cleaning (if model ignores JSON mode or fallback needed)
-    if (txt.includes("```json")) txt = txt.split("```json")[1].split("```")[0];
-    else if (txt.includes("```")) txt = txt.split("```")[1].split("```")[0];
+    if (expectJson) {
+      // Standard markdown cleaning if model ignores JSON mode (though application/json should handle it)
+      if (txt.includes("```json")) txt = txt.split("```json")[1].split("```")[0];
+      else if (txt.includes("```")) txt = txt.split("```")[1].split("```")[0];
+    }
 
     const usage = response.usageMetadata || {};
     return {
-      data: JSON.parse(txt.trim()),
+      data: expectJson ? JSON.parse(txt.trim()) : txt.trim(),
       usage: {
         promptTokens: (usage as any).promptTokenCount || 0,
         completionTokens: (usage as any).candidatesTokenCount || 0,
@@ -101,9 +112,6 @@ function computeBasicInsights(summaryData: any[], followers: number = 0, playboo
   if (followers > 0) {
     rawEngRate = ((avgLikes + avgComments) / followers) * 100;
     engRate = `${rawEngRate.toFixed(2)}%`;
-  } else if (avgViews > 0) {
-    rawEngRate = ((avgLikes + avgComments) / avgViews) * 100;
-    engRate = `${rawEngRate.toFixed(2)}%`;
   }
 
   // ── Account Score (weighted) ───────────────────────────────────────────────
@@ -117,33 +125,22 @@ function computeBasicInsights(summaryData: any[], followers: number = 0, playboo
 
   // ── Post ranking (Algorithm v3 + v4.md Metrics) ───────────────────────────
   const scored = summaryData.map(p => {
-    let v4Value = 0;
-    let internalScore = 0;
-
-    if (p.type === "Video") {
-      // engagement_rate (video) = (likes + comments) / views × 100
-      v4Value = p.view_count > 0 ? ((p.like_count + p.comments_count) / p.view_count) * 100 : 0;
-      // Internal Eng for sorting (Algorithm v3)
-      internalScore = (p.like_count + (p.comments_count * 2.5)) / Math.max(p.view_count, 1);
-    } else {
-      // engagement_score (image) = likes + comments
-      v4Value = p.like_count + p.comments_count;
-      // Internal Eng for sorting (Algorithm v3) - for images, we use likes + comments * 2.5
-      internalScore = p.like_count + (p.comments_count * 2.5);
-    }
+    // WES (Weighted Engagement Score) = likes + (comments * 2.5)
+    // No division by views, no * 100
+    const wes = p.like_count + (p.comments_count * 2.5);
 
     return {
       ...p,
-      engagement_metric: v4Value,
-      engagement_metric_type: p.type === "Video" ? "rate" : "score",
-      eng: internalScore,
+      engagement_metric: wes,
+      engagement_metric_type: "score",
+      eng: wes,
     };
   });
   scored.sort((a, b) => b.eng - a.eng);
 
   // ── Viral Potential (% of posts > 2x average engagement) ──────────────────
   const avgEngAcrossPosts = (totalLikes + totalComments) / total;
-  const viralPostsCount = summaryData.filter(p => (p.like_count + p.comments_count) > (avgEngAcrossPosts * 2)).length;
+  const viralPostsCount = summaryData.filter(p => p.view_count > (avgViews * 1.5)).length;
   const viralPotential = Math.min(100, Math.round((viralPostsCount / total) * 100));
 
   // ── Best Posting Hour (Avg Engagement per Hour) ──────────────────────────
@@ -219,9 +216,9 @@ function computeBasicInsights(summaryData: any[], followers: number = 0, playboo
       hashtags: topHashtagsFinal.length > 0 ? topHashtagsFinal : ["businessowner", "creativestrategy"]
     },
     advanced_analysis: {
-      post_classifications: scored.map((p, i) => ({
+      post_classifications: scored.map((p) => ({
         ...p,
-        tier: i < Math.ceil(total * 0.25) ? "viral" : i < Math.ceil(total * 0.75) ? "average" : "poor",
+        tier: p.view_count > (avgViews * 1.5) ? "viral" : p.view_count < (avgViews * 0.5) ? "poor" : "average",
       })),
       growth_opportunities: [
         `Optimal Posting: Post around ${bestHourFinal}:00 for maximum reach.`,
@@ -303,17 +300,38 @@ function normalizePosts(items: any[]) {
     if (type === "Reel" || type === "GraphVideo") type = "Video";
 
     return {
-      ...item,
+      id: item.id || item.shortCode || "",
+      shortCode: item.shortCode || "",
+      type: type,
+      caption: item.caption || "",
       likesCount: item.likesCount ?? item.likes ?? 0,
       commentsCount: item.commentsCount ?? item.comments ?? 0,
       videoViewCount: item.videoViewCount ?? item.videoPlayCount ?? item.views ?? 0,
-      displayUrl: item.displayUrl || item.thumbnailUrl || item.previewUrl || item.url,
-      type: type,
-      timestamp: item.timestamp ?? item.taken_at_timestamp,
-      music_info: item.musicArtist ? `${item.musicArtist} - ${item.musicName}` : null,
-      tagged_users: (item.taggedUsers || []).map((u: any) => u.username),
+      playCount: item.playCount || item.videoPlayCount || 0,
+      saveCount: item.saveCount || 0,
+      shareCount: item.shareCount || 0,
+      displayUrl: item.displayUrl || item.thumbnailUrl || item.previewUrl || item.url || "",
+      url: item.url || `https://www.instagram.com/p/${item.shortCode}/`,
+      timestamp: (item.timestamp ?? item.taken_at_timestamp) || "",
+      videoDuration: item.videoDuration || 0,
+      music_info: item.musicArtist ? `${item.musicArtist} - ${item.musicName}` : (item.music_info || null),
+      tagged_users: (item.taggedUsers || item.tagged_users || []).map((u: any) => typeof u === 'string' ? u : u.username),
+      latestComments: item.latestComments || item.latest_comments || [],
     };
   });
+}
+
+/**
+ * Extracts a meaningful hook from a caption, skipping emoji-only or too short lines.
+ */
+function extractHook(caption: string) {
+  if (!caption) return "";
+  const lines = caption.split("\n").map(l => l.trim());
+  // Skip lines that are mostly emojis or too short
+  const meaningful = lines.find(l =>
+    l.replace(/[\p{Emoji}\s]/gu, "").length > 5
+  );
+  return (meaningful || lines[0] || "").slice(0, 80);
 }
 
 function buildSummaryData(normalizedPosts: any[]) {
@@ -324,13 +342,16 @@ function buildSummaryData(normalizedPosts: any[]) {
     view_count: item.videoViewCount,
     timestamp: item.timestamp,
     caption: (item.caption || "").substring(0, 300),
-    hook_text: (item.caption || "").split("\n")[0].substring(0, 80),
+    hook_text: extractHook(item.caption),
     hashtags: item.hashtags || [],
     duration: item.videoDuration || 0,
     music: item.music_info,
     tagged_users: item.tagged_users,
     is_collab: item.tagged_users.length > 0,
-    latest_comments: (item.latestComments || []).map((c: any) => ({ text: c.text })),
+    latest_comments: (item.latestComments || []).map((c: any) => ({
+      text: c.text,
+      ownerUsername: c.ownerUsername
+    })),
   }));
 }
 
@@ -338,7 +359,154 @@ function buildSummaryData(normalizedPosts: any[]) {
 async function startServer() {
   const app = express();
   const PORT = 3000;
-  app.use(express.json());
+  app.use(express.json({ limit: "100mb" }));
+  app.use(express.urlencoded({ limit: "100mb", extended: true }));
+
+  // ─── Auth Endpoints ───────────────────────────────────────────────────────
+
+  app.post("/api/auth/register", async (req, res) => {
+    const { email, password, name } = req.body;
+    if (!email || !password) return res.status(400).json({ error: "Email and password are required" });
+    try {
+      const result = await registerUser(email, password, name || "");
+      return res.json(result);
+    } catch (err: any) {
+      console.error("[Auth] Register failed:", err.message);
+      return res.status(400).json({ error: err.message || "Registration failed" });
+    }
+  });
+
+  app.post("/api/auth/login", async (req, res) => {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: "Email and password are required" });
+    try {
+      const result = await loginUser(email, password);
+      return res.json(result);
+    } catch (err: any) {
+      console.error("[Auth] Login failed:", err.message);
+      return res.status(401).json({ error: "Invalid email or password" });
+    }
+  });
+
+  app.get("/api/auth/me", async (req, res) => {
+    const token = (req.headers.authorization || "").replace("Bearer ", "");
+    if (!token) return res.status(401).json({ error: "No token provided" });
+    try {
+      const user = await validateToken(token);
+      if (!user) return res.status(401).json({ error: "Invalid token" });
+      return res.json({ user });
+    } catch {
+      return res.status(401).json({ error: "Token validation failed" });
+    }
+  });
+
+  // ─── Save Endpoint (triggered by Save button) ──────────────────────────────
+
+  app.post("/api/save", async (req, res) => {
+    const token = (req.headers.authorization || "").replace("Bearer ", "");
+    if (!token) return res.status(401).json({ error: "Authentication required" });
+
+    const user = await validateToken(token);
+    if (!user) return res.status(401).json({ error: "Invalid token" });
+
+    const { profile: profileData, posts: postsData, insights, aiResponse } = req.body;
+    if (!profileData || !postsData) return res.status(400).json({ error: "Profile and posts data are required" });
+
+    try {
+      // 1. Save/update profile
+      const pbProfile: ProfileData = {
+        ig_username: profileData.username || "",
+        full_name: profileData.fullName || "",
+        followers_count: profileData.followersCount || 0,
+        following_count: profileData.followingCount || 0,
+        posts_count: profileData.postsCount || 0,
+        profile_pic_url: profileData.profilePicUrl || "",
+        category_name: profileData.categoryName || "",
+        biography: profileData.biography || "",
+      };
+      const savedProfile = await saveProfile(user.id, pbProfile, token);
+      console.log(`[Save] Profile saved: ${pbProfile.ig_username} (id: ${savedProfile.id})`);
+
+      // 2. Save posts (smart aggregation)
+      const pbPosts: PostData[] = postsData.map((p: any) => ({
+        ig_post_id: p.id || p.shortCode || "",
+        short_code: p.shortCode || "",
+        type: p.type || "Image",
+        caption: (p.caption || "").substring(0, 5000),
+        likes_count: p.likesCount || p.likes_count || 0,
+        comments_count: p.commentsCount || p.comments_count || 0,
+        video_view_count: p.videoViewCount || p.video_view_count || 0,
+        play_count: p.playCount || p.play_count || 0,
+        save_count: p.saveCount || p.save_count || 0,
+        share_count: p.shareCount || p.share_count || 0,
+        display_url: p.displayUrl || p.display_url || "",
+        timestamp: p.timestamp || "",
+        hashtags: p.hashtags || [],
+        url: p.url || "",
+        duration: p.videoDuration || p.duration || 0,
+        music_info: p.music_info || null,
+        tagged_users: p.tagged_users || [],
+      }));
+      const { newCount, updatedCount } = await savePosts(savedProfile.id, pbPosts, token);
+      console.log(`[Save] Posts: ${newCount} new, ${updatedCount} updated`);
+
+      // 3. Save comments for each post
+      let totalCommentsSaved = 0;
+      for (const p of postsData) {
+        const comments = p.latestComments || p.latest_comments || [];
+        if (comments.length === 0) continue;
+
+        const igPostId = p.id || p.shortCode || "";
+        const postRecordId = await getPostRecordId(savedProfile.id, igPostId, token);
+        if (!postRecordId) continue;
+
+        const pbComments: CommentData[] = comments.map((c: any) => ({
+          text: typeof c === "string" ? c : (c.text || ""),
+          owner_username: typeof c === "string" ? "unknown" : (c.ownerUsername || c.owner_username || "unknown"),
+        }));
+        totalCommentsSaved += await saveComments(postRecordId, pbComments, token);
+      }
+      console.log(`[Save] Comments saved: ${totalCommentsSaved}`);
+
+      // 4. Save analysis
+      if (insights) {
+        await saveAnalysis(user.id, savedProfile.id, {
+          insights: insights,
+          ai_response: aiResponse || null,
+          action_cards: insights.action_cards || [],
+          next_post_plan: insights.next_post_plan || {},
+        }, token);
+        console.log(`[Save] Analysis saved for ${pbProfile.ig_username}`);
+      }
+
+      return res.json({
+        success: true,
+        profileId: savedProfile.id,
+        posts: { new: newCount, updated: updatedCount },
+        commentsSaved: totalCommentsSaved,
+      });
+    } catch (err: any) {
+      console.error("[Save] Failed:", err.message);
+      return res.status(500).json({ error: "Save failed: " + err.message });
+    }
+  });
+
+  // ─── History Endpoint ──────────────────────────────────────────────────────
+
+  app.get("/api/history", async (req, res) => {
+    const token = (req.headers.authorization || "").replace("Bearer ", "");
+    if (!token) return res.status(401).json({ error: "Authentication required" });
+
+    const user = await validateToken(token);
+    if (!user) return res.status(401).json({ error: "Invalid token" });
+
+    try {
+      const analyses = await getAnalyses(user.id, token);
+      return res.json({ analyses });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
 
   // Image Proxy to bypass Instagram CDN restrictions
   app.get("/api/image-proxy", async (req, res) => {
@@ -363,8 +531,50 @@ async function startServer() {
     }
   });
 
+  // New endpoint for image generation prompt
+  app.post("/api/generate-thumbnail-prompt", async (req, res) => {
+    console.log("[Thumbnail] Request received. DryRun:", req.body.dryRun);
+    const { niche, productName, caption, keyDetails, dryRun } = req.body;
+
+    const prompt = `You are a professional AI image prompt engineer specializing in Indian fashion, jewellery, and lifestyle product photography.
+
+A seller has provided their business and product details below. Analyze the product type yourself and generate ONE ready-to-use image generation prompt they can paste into Leonardo AI, Midjourney, or Adobe Firefly.
+
+SELLER DATA:
+Niche: ${niche || 'Fashion'}
+Product Name: ${productName || 'Product'}
+Caption: ${caption || ''}
+Key Details: ${keyDetails || ''}
+
+YOUR JOB:
+- Detect the product type from the data above (saree / lehenga / jewellery / indo-western / kurta / other)
+- Choose the right model pose and setting for that product type
+- Generate a prompt that shows the product being WORN or USED by a real Indian model in a professional fashion catalogue style
+
+PRODUCT TYPE RULES (apply automatically):
+- Saree / Lehenga / Ethnic wear → full body standing, traditional draping, studio or elegant indoor background
+- Jewellery → close-up on model, focus on neck/ears/wrist, soft bokeh background, skin tone contrast
+- Indo-western / Western / Fusion → dynamic pose, lifestyle setting, natural light or urban background  
+- Kurta / Suit → three-quarter body, clean minimal background, soft daylight
+
+OUTPUT FORMAT (strictly this only):
+Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
+
+    if (dryRun) {
+      return res.json({ dryRun: true, prompt });
+    }
+
+    try {
+      const aiResult = await callAI(prompt, true);
+      return res.json(aiResult.data);
+    } catch (err: any) {
+      console.error("[Thumbnail] generation failed:", err.message);
+      return res.status(500).json({ error: "Failed to generate thumbnail prompt" });
+    }
+  });
+
   app.post("/api/insights", async (req, res) => {
-    const { username, contentType, enableAI } = req.body;
+    const { username, contentType, enableAI, dryRun } = req.body;
     const count = 30; // Hardcoded default as per v4.md requirements
     if (!username) return res.status(400).json({ error: "Username is required" });
 
@@ -393,10 +603,11 @@ async function startServer() {
         postsCount: pInfo.postsCount ?? first.postsCount ?? items.length,
         profilePicUrl: first.profilePicUrl || pInfo.profilePicUrl || null,
         categoryName: [first.businessCategoryName, pInfo.categoryName].find(c => c && typeof c === 'string' && c.toLowerCase() !== 'none') || (first.isBusinessAccount ? "Business" : "Creator"),
+        biography: first.biography || pInfo.biography || "",
       };
 
       // 1. Detect Niche via Playbooks (Early detection so computeBasicInsights can use it)
-      const { playbook } = detectNiche(userProfile);
+      const { playbook, nicheKey } = detectNiche(userProfile);
 
       // ── STEP 2: Normalize and Enhance ────────────────────────────────────
       const normalizedPosts = normalizePosts(items);
@@ -470,8 +681,7 @@ async function startServer() {
       let aiInsights: any = null;
       let aiUsage: any = null;
 
-      // 1. Detect Niche via Playbooks
-      const { nicheKey } = detectNiche(userProfile);
+      // 1. Log Niche (Already detected early)
       console.log(`[AI] Niche dynamically selected: ${playbook.nicheLabel} (${nicheKey})`);
 
       const enrichedData = await enrichedPromise;
@@ -495,13 +705,12 @@ async function startServer() {
 
       // 2. Prepare Minimal Data for AI (Block 1: Account Snapshot)
       const postMixStr = `${aiInsightsBase.account_summary.image_count} Images, ${aiInsightsBase.account_summary.reel_count} Reels`;
-      const accountSnapshot = `ACCOUNT: @${userProfile.username} | Niche: ${playbook.nicheLabel} | Followers: ${aiFollowerCount} | Avg Likes: ${aiInsightsBase.account_summary.avg_likes} | Avg Views: ${aiInsightsBase.account_summary.avg_views} | Best Hour: ${aiInsightsBase.account_summary.best_hour} | Account Score: ${aiInsightsBase.account_score}/100 | Buyer Intent: ${aiInsightsBase.buyer_intent_score}% | Post Mix: ${postMixStr}`;
+      const accountSnapshot = `@${userProfile.username} | Niche: ${playbook.nicheLabel} | Followers: ${aiFollowerCount} | Avg Likes: ${aiInsightsBase.account_summary.avg_likes} | Avg Views: ${aiInsightsBase.account_summary.avg_views} | Best Hour: ${aiInsightsBase.account_summary.best_hour} | Account Score: ${aiInsightsBase.account_score}/100 | Buyer Intent: ${aiInsightsBase.buyer_intent_score}% | Post Mix: ${postMixStr}`;
 
       // 3. Prepare Minimal Data for AI (Block 2: Top Posts Summary)
       const formatPost = (p: any, type: string) => {
-        const avgEng = aiInsightsBase.account_summary.total_interactions / (aiInsightsBase.account_summary.total_posts_analyzed || 1);
-        const pEng = (p.like_count || 0) + (p.comments_count || 0);
-        const tier = pEng > (avgEng * 2) ? "VIRAL" : pEng < (avgEng * 0.5) ? "POOR" : "AVERAGE";
+        const avgViews = aiInsightsBase.account_summary.avg_views;
+        const tier = (p.view_count || 0) > (avgViews * 1.5) ? "VIRAL" : (p.view_count || 0) < (avgViews * 0.5) ? "POOR" : "AVERAGE";
 
         let str = `[${type}] ${p.type} | Likes:${p.like_count || 0}`;
         if (p.comments_count) str += ` | Comments:${p.comments_count}`;
@@ -531,13 +740,13 @@ async function startServer() {
 
       const prompt = `You are a Social Media Growth Strategist for small businesses.
 
-  ACCOUNT CONTEXT: ${accountSnapshot}
+  ACCOUNT: ${accountSnapshot}
   POST PERFORMANCE: ${topPostsSummary}
-  NICHE PLAYBOOK: ${playbookBlock}
+  ${playbookBlock}
 
   TASK: Analyze the account signals and return EXACTLY:
-  1. next_post_plan: topic, type, time, hook, cta, full_caption, 10_hashtags
-  2. post_classifications: tier each post as viral/average/poor with one reason
+  1. next_post_plan: topic, type, time, hook, cta, caption, hashtags (return as JSON)
+  2. advanced_analysis: post_classifications: tier each post as viral/average/poor with one reason
   3. action_cards: EXACTLY 3 cards. Each card MUST have deep niche-specific logic.
 
   ACTION CARD RULES:
@@ -550,10 +759,12 @@ async function startServer() {
   - Be EXTREMELY specific to THIS account. Mention their EXACT product names, hook styles, and niche signals.
   - DO NOT give generic advice.
   - DO NOT use template text like "Strategic topic based on NICHE". Write REAL text.
-  - Output JSON only. No markdown.
+  - Use Gemini's JSON mode.
   - Each action must be executable within 24 hours
 
-  ALGORITHM v4 JSON REQUIREMENTS (STRICT):
+  REQUIRED: Return your analysis as JSON with keys: next_post_plan, advanced_analysis, action_cards.
+  
+  JSON STRUCTURE:
   {
     "next_post_plan": {
       "topic": "Actual Topic Title",
@@ -567,24 +778,24 @@ async function startServer() {
     "advanced_analysis": {
       "post_classifications": [{ "type": "", "tier": "viral|average|poor", "engagement_score": 0, "reason": "Why it's viral/poor" }]
     },
-    "action_cards": [
-      {
-        "id": "playbook_action_1",
-        "type": "growth | sales | engagement | opportunity | warning",
-        "title": "Clear Action Heading",
-        "priority": "high",
-        "confidence_score": 90,
-        "trigger": "Signal Detected from Playbook",
-        "action": { "primary": "What to do", "secondary": "Why it's smart" },
-        "ready_to_copy": { "hook": "Suggested Hook", "caption": "Body", "cta": "CTA" },
-        "post_time": { "date": "Tomorrow", "time": "HH:MM" },
-        "expected_result": { "metric": "+X% growth | sales", "confidence_level": "High" },
-        "meta": { "difficulty": "Easy", "estimated_time_to_create": "15m", "impact_score": 9, "urgency_score": 8 }
-      }
-    ]
+    ...
   }
+`;
 
-  REQUIRED: EXACTLY 3 high-impact action_cards representing the mapped Playbook strategies. JSON ONLY.`;
+      if (dryRun) {
+        res.write(JSON.stringify({
+          type: "ai",
+          data: {
+            insights: aiInsightsBase,
+            aiUsed: false,
+            dev: {
+              prompt: prompt,
+              usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
+            }
+          }
+        }) + "\n");
+        return res.end();
+      }
 
       try {
         const aiResult = await callAI(prompt);
@@ -631,6 +842,76 @@ async function startServer() {
         res.write(JSON.stringify({ type: "error", error: "Analysis failed", details: error.message }) + "\n");
         return res.end();
       }
+    }
+  });
+
+  // Dedicated analysis-only endpoint
+  app.post("/api/analyze-existing", async (req, res) => {
+    console.log("[Strategy] Request received. DryRun:", req.body.dryRun);
+    let { userProfile, summaryData, playbook, dryRun, posts } = req.body;
+
+    if (!userProfile) return res.status(400).json({ error: "UserProfile missing" });
+
+    if (!summaryData) {
+      if (posts && Array.isArray(posts)) {
+        console.log("[Strategy] SummaryData missing, rebuilding from posts...");
+        summaryData = buildSummaryData(posts);
+      } else {
+        return res.status(400).json({ error: "Data missing (summaryData or posts required)" });
+      }
+    }
+
+    // 0. Detect Niche if missing (crucial for existing data loads)
+    const effectivePlaybook = playbook || detectNiche(userProfile).playbook;
+
+    // 1. Re-calculate baseline insights if needed or just prepare for AI
+    const followers = userProfile.followersCount || 0;
+    const basicInsights = computeBasicInsights(summaryData, followers, effectivePlaybook);
+
+    const postMixStr = `${basicInsights.account_summary.image_count} Images, ${basicInsights.account_summary.reel_count} Reels`;
+    const accountSnapshot = `@${userProfile.username} | Niche: ${effectivePlaybook?.nicheLabel || 'Fashion'} | Followers: ${followers} | Avg Likes: ${basicInsights.account_summary.avg_likes} | Avg Views: ${basicInsights.account_summary.avg_views} | Best Hour: ${basicInsights.account_summary.best_hour} | Account Score: ${basicInsights.account_score}/100 | Buyer Intent: ${basicInsights.buyer_intent_score}% | Post Mix: ${postMixStr}`;
+
+    const sortedSummaryPosts = [...summaryData].sort((a, b) => {
+      const scoreA = a.type === "Video" ? a.view_count : a.like_count + a.comments_count;
+      const scoreB = b.type === "Video" ? b.view_count : b.like_count + b.comments_count;
+      return scoreB - scoreA;
+    });
+    const top5 = sortedSummaryPosts.slice(0, 5);
+    const bottom3 = sortedSummaryPosts.slice(Math.max(sortedSummaryPosts.length - 3, 5));
+
+    const formatPost = (p: any, type: string) => {
+      const avgViews = basicInsights.account_summary.avg_views;
+      const tier = (p.view_count || 0) > (avgViews * 1.5) ? "VIRAL" : (p.view_count || 0) < (avgViews * 0.5) ? "POOR" : "AVERAGE";
+      return `[${type}] ${p.type} | Likes:${p.like_count || 0} | Views:${p.view_count || 0} | Hook: "${p.hook_text}" | Tier: ${tier}`;
+    };
+
+    const topPostsSummary = `TOP POSTS: ${top5.map((p, i) => formatPost(p, String(i + 1))).join(" ")} WORST POSTS: ${bottom3.map((p, i) => formatPost(p, String(top5.length + i + 1))).join(" ")}`;
+    const playbookBlock = `PLAYBOOK [${effectivePlaybook?.nicheLabel}]: SIGNALS: ${effectivePlaybook?.signals?.join(" | ")}. ACTIONS: ${effectivePlaybook?.priorityActions?.slice(0, 3).join(" | ")}.`;
+
+    const prompt = `You are a Social Media Growth Strategist.
+ACCOUNT: ${accountSnapshot}
+POSTS: ${topPostsSummary}
+${playbookBlock}
+
+TASK: Return JSON with keys: next_post_plan, advanced_analysis, action_cards.
+BE SPECIFIC TO THIS STORE. NO PLACEHOLDERS.`;
+
+    if (dryRun) {
+      return res.json({ dryRun: true, prompt });
+    }
+
+    try {
+      const aiResult = await callAI(prompt, true);
+      return res.json({
+        insights: {
+          ...basicInsights,
+          ...aiResult.data
+        },
+        aiUsed: true,
+        usage: aiResult.usage
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
     }
   });
 

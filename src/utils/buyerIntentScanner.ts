@@ -96,6 +96,11 @@ export function scanBuyerIntent(posts: any[]): BuyerIntentResult {
         const postSignals: string[] = [];
 
         for (const comment of comments) {
+            // Skip comments where ownerUsername is "unknown" (the post owner)
+            if (typeof comment !== "string" && comment.ownerUsername === "unknown") {
+                continue;
+            }
+
             const text = typeof comment === "string" ? comment : (comment.text || comment.comment || "");
             if (!text) continue;
 

@@ -157,7 +157,8 @@ async function scrapeWithApify(username: string, count: number): Promise<any[]> 
             followsCount: profile.followsCount,
             postsCount: profile.postsCount,
             profilePicUrl: profile.profilePicUrl,
-            businessCategoryName: profile.businessCategoryName,
+            biography: profile.biography || "",
+            businessCategoryName: profile.businessCategoryName || profile.categoryName,
             isBusinessAccount: profile.isBusinessAccount,
         }));
 
@@ -171,7 +172,8 @@ async function scrapeWithApify(username: string, count: number): Promise<any[]> 
             followsCount: profile.followsCount,
             postsCount: profile.postsCount,
             profilePicUrl: profile.profilePicUrl,
-            businessCategoryName: profile.businessCategoryName,
+            biography: profile.biography || "",
+            businessCategoryName: profile.businessCategoryName || profile.categoryName,
             isBusinessAccount: profile.isBusinessAccount,
         }));
 

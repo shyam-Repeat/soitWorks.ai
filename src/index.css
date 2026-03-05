@@ -111,7 +111,7 @@
 }
 
 .pill-badge {
-  @apply inline-flex items-center px-3 py-1 border-2 border-black text-[10px] font-black uppercase tracking-wider bg-white;
+  @apply inline-flex items-center px-3 py-1 border-2 border-black text-[10px] font-black uppercase tracking-wider;
   box-shadow: 3px 3px 0px 0px rgba(0, 0, 0, 1);
 }
 

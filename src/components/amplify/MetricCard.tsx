@@ -36,8 +36,8 @@ export const MetricCard: React.FC<MetricCardProps> = ({
             icon: "text-black",
         },
         blue: {
-            badge: "bg-blue !text-white",
-            icon: "text-blue",
+            badge: "!bg-[#3b82f6] !text-white",
+            icon: "text-[#3b82f6]",
         }
     };
 
