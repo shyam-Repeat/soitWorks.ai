@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"C:/Users/ELCOT/Documents/GitHub/instainsight/pocketbase.exe serve\" \"npm run server\"",
+    "dev": "concurrently \"npm run pb\" \"npm run server\"",
+    "pb": "pocketbase serve --dir ./pb_data || ./pocketbase.exe serve --dir ./pb_data",
     "server": "tsx server.ts",
     "build": "vite build",
     "start": "node server.ts",
