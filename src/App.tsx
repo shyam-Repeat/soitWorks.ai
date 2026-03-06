@@ -220,6 +220,10 @@ export default function App() {
       }
     }
 
+    const existingPostsToPass = (data && data.user?.username && data.user.username.toLowerCase() === targetUsername.toLowerCase())
+      ? (data.posts || [])
+      : [];
+
     setLoading(true);
     setLoadingStage('Analyzing Social Intelligence...');
     setError(null);
@@ -232,7 +236,8 @@ export default function App() {
           username: targetUsername,
           contentType: contentType,
           enableAI: enableAI,
-          dryRun: devMode
+          dryRun: devMode,
+          existingPosts: existingPostsToPass
         }),
       });
 

@@ -202,8 +202,10 @@ def filter_items(items, content_type):
         return [i for i in items if i.get("type") == "Image"]
     return items
 
-def scrape_instagram(username, count=15, cookie_path=None, content_type="all", include_comments=True):
-    print(f"[Scrapling] Targeting {username} for {count} items...", file=sys.stderr)
+def scrape_instagram(username, count=15, cookie_path=None, content_type="all", include_comments=True, existing_posts=None):
+    if existing_posts is None:
+        existing_posts = set()
+    print(f"[Scrapling] Targeting {username} for {count} items... (Skipping {len(existing_posts)} existing)", file=sys.stderr)
     items_map = {}
     last_page_info = {}
     session_cookies = load_cookies(cookie_path)
@@ -260,8 +262,19 @@ def scrape_instagram(username, count=15, cookie_path=None, content_type="all", i
         # Scroll loop
         max_scrolls = 20 if count > 6 else 8
         stale_rounds = 0
+        hit_existing = False
         for i in range(max_scrolls):
             if len(items_map) >= count: break
+            
+            # Check if we hit an existing post
+            for it in items_map.values():
+                if it.get('shortCode') in existing_posts or it.get('id') in existing_posts:
+                    print(f"[Scrapling] Reached already scraped post: {it.get('shortCode')}. Stopping scroll.", file=sys.stderr)
+                    hit_existing = True
+                    break
+            if hit_existing:
+                break
+
             before = len(items_map)
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             time.sleep(1.2)
@@ -281,6 +294,10 @@ def scrape_instagram(username, count=15, cookie_path=None, content_type="all", i
             print("[Scrapling] Extracting comments...", file=sys.stderr)
             sorted_items = sorted(items_map.values(), key=lambda x: x['timestamp'], reverse=True)
             for it in sorted_items[:count]:
+                if it.get('shortCode') in existing_posts or it.get('id') in existing_posts:
+                    print(f"[Scrapling] Skipping comment extraction for existing post: {it.get('shortCode')}", file=sys.stderr)
+                    continue
+
                 try:
                     active_post["shortCode"] = it.get("shortCode")
                     network_comments.clear()
@@ -391,10 +408,15 @@ if __name__ == "__main__":
     content_type = sys.argv[3] if len(sys.argv) > 3 else "all"
     n = int(sys.argv[4]) if len(sys.argv) > 4 else 12
     include_comments = sys.argv[5] != "0" if len(sys.argv) > 5 else True
+    existing_posts_arg = sys.argv[6] if len(sys.argv) > 6 else "NONE"
+    
+    existing_posts = set(existing_posts_arg.split(',')) if existing_posts_arg != "NONE" and existing_posts_arg else set()
+    
     print(json.dumps(scrape_instagram(
         u,
         count=n,
         cookie_path=cookie_path,
         content_type=content_type,
-        include_comments=include_comments
+        include_comments=include_comments,
+        existing_posts=existing_posts
     )))

@@ -19,7 +19,8 @@ function runPythonScraper(
     cookiePathOrNone: string,
     contentType: string,
     count: number,
-    includeComments: boolean
+    includeComments: boolean,
+    existingPostIds: string[] = []
 ): Promise<string> {
     return new Promise((resolve, reject) => {
         const args = [
@@ -29,6 +30,7 @@ function runPythonScraper(
             contentType,
             String(count),
             includeComments ? "1" : "0",
+            existingPostIds.length > 0 ? existingPostIds.join(',') : "NONE"
         ];
 
         let stdout = "";
@@ -66,9 +68,10 @@ export async function scrapeInstagramProfile(
     username: string,
     contentType: string = 'all',
     count: number = 12,
-    includeComments: boolean = true
+    includeComments: boolean = true,
+    existingPostIds: string[] = []
 ): Promise<any[]> {
-    console.log(`[Scrapling] Starting data extraction for: ${username} (Type: ${contentType}, Count: ${count}, Comments: ${includeComments})`);
+    console.log(`[Scrapling] Starting data extraction for: ${username} (Type: ${contentType}, Count: ${count}, Comments: ${includeComments}, Existing: ${existingPostIds.length})`);
 
     // Attempt to locate standard cookie file
     const cookiePath = path.resolve('instagram_cookies.json');
@@ -83,7 +86,8 @@ export async function scrapeInstagramProfile(
             cookieArg,
             contentType,
             count,
-            includeComments
+            includeComments,
+            existingPostIds
         );
 
         if (!stdout || stdout.trim() === "") {

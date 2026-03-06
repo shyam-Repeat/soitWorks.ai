@@ -566,7 +566,13 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
 
     try {
       const aiResult = await callAI(prompt, true);
-      return res.json(aiResult.data);
+      // Normalize keys to uppercase for frontend compatibility
+      const data = aiResult.data;
+      const normalizedData = {
+        PROMPT: data.PROMPT || data.prompt || "",
+        NEGATIVE_PROMPT: data.NEGATIVE_PROMPT || data.negative_prompt || ""
+      };
+      return res.json(normalizedData);
     } catch (err: any) {
       console.error("[Thumbnail] generation failed:", err.message);
       return res.status(500).json({ error: "Failed to generate thumbnail prompt" });
@@ -574,15 +580,16 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
   });
 
   app.post("/api/insights", async (req, res) => {
-    const { username, contentType, enableAI, dryRun } = req.body;
+    const { username, contentType, enableAI, dryRun, existingPosts = [] } = req.body;
     const count = 30; // Hardcoded default as per v4.md requirements
     if (!username) return res.status(400).json({ error: "Username is required" });
 
     try {
       // ── STEP 1: Scrape latest content with configurable type and count ───
-      const items = await scrapeInstagramProfile(username, contentType, count, false);
+      const existingPostIds = existingPosts.map((p: any) => p.shortCode || p.id).filter(Boolean);
+      const items = await scrapeInstagramProfile(username, contentType, count, false, existingPostIds);
 
-      if (!items || items.length === 0) {
+      if ((!items || items.length === 0) && existingPosts.length === 0) {
         return res.status(404).json({
           error: "No posts found or profile is private.",
           details: "The scraper couldn't find any recent posts for this username.",
@@ -590,19 +597,19 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
         });
       }
 
-      // Profile extraction
-      const first: any = items[0];
+      // Profile extraction - prefer new items if available, else existing
+      const first: any = items.length > 0 ? items[0] : (existingPosts.length > 0 ? existingPosts[0] : {});
       const pInfo = first?.owner || first?.user || {};
       const fCount = pInfo.followersCount ?? pInfo.followers ?? first.followersCount ?? 0;
 
       const userProfile = {
         username: first.ownerUsername || pInfo.username || username,
-        fullName: first.ownerFullName || pInfo.fullName || "",
+        fullName: first.ownerFullName || pInfo.fullName || first.ownerFullName || "",
         followersCount: fCount,
-        followingCount: pInfo.followingCount ?? first.followsCount ?? 0,
-        postsCount: pInfo.postsCount ?? first.postsCount ?? items.length,
+        followingCount: pInfo.followingCount ?? first.followsCount ?? first.followingCount ?? 0,
+        postsCount: pInfo.postsCount ?? first.postsCount ?? (items.length + existingPosts.length),
         profilePicUrl: first.profilePicUrl || pInfo.profilePicUrl || null,
-        categoryName: [first.businessCategoryName, pInfo.categoryName].find(c => c && typeof c === 'string' && c.toLowerCase() !== 'none') || (first.isBusinessAccount ? "Business" : "Creator"),
+        categoryName: [first.businessCategoryName, pInfo.categoryName, first.categoryName].find(c => c && typeof c === 'string' && c.toLowerCase() !== 'none') || (first.isBusinessAccount ? "Business" : "Creator"),
         biography: first.biography || pInfo.biography || "",
       };
 
@@ -610,7 +617,24 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
       const { playbook, nicheKey } = detectNiche(userProfile);
 
       // ── STEP 2: Normalize and Enhance ────────────────────────────────────
-      const normalizedPosts = normalizePosts(items);
+      const newlyNormalizedPosts = normalizePosts(items);
+      const allPostsMap = new Map();
+      existingPosts.forEach((p: any) => allPostsMap.set(p.shortCode || p.id, p));
+      newlyNormalizedPosts.forEach((p: any) => {
+        const key = p.shortCode || p.id;
+        if (allPostsMap.has(key)) {
+          const existing = allPostsMap.get(key);
+          if (!p.latestComments || p.latestComments.length === 0) {
+            p.latestComments = existing.latestComments || existing.latest_comments || [];
+          }
+        }
+        allPostsMap.set(key, p);
+      });
+
+      const normalizedPosts = Array.from(allPostsMap.values())
+        .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+        .slice(0, count);
+
       const summaryData = buildSummaryData(normalizedPosts);
 
       // ── STEP 3: Basic Baseline Dashboard ────────────────────────────────
@@ -632,7 +656,8 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
         }
       }) + "\n");
 
-      const enrichedPromise = scrapeInstagramProfile(username, contentType, count, true)
+      // For enriched promise, only re-scrape if there are new items that need comments
+      const enrichedPromise = items.length > 0 ? scrapeInstagramProfile(username, contentType, count, true, existingPostIds)
         .then((enrichedItems: any[]) => {
           if (!enrichedItems || enrichedItems.length === 0) {
             return null;
@@ -641,7 +666,25 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
           const enrichedFirst: any = enrichedItems[0];
           const enrichedPInfo = enrichedFirst?.owner || enrichedFirst?.user || {};
           const enrichedFollowers = enrichedPInfo.followersCount ?? enrichedPInfo.followers ?? enrichedFirst.followersCount ?? fCount;
-          const enrichedNormalizedPosts = normalizePosts(enrichedItems);
+          const newlyEnrichedNormalizedPosts = normalizePosts(enrichedItems);
+
+          const enrichedAllMap = new Map();
+          existingPosts.forEach((p: any) => enrichedAllMap.set(p.shortCode || p.id, p));
+          newlyEnrichedNormalizedPosts.forEach((p: any) => {
+            const key = p.shortCode || p.id;
+            if (enrichedAllMap.has(key)) {
+              const existing = enrichedAllMap.get(key);
+              if (!p.latestComments || p.latestComments.length === 0) {
+                p.latestComments = existing.latestComments || existing.latest_comments || [];
+              }
+            }
+            enrichedAllMap.set(key, p);
+          });
+
+          const enrichedNormalizedPosts = Array.from(enrichedAllMap.values())
+            .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+            .slice(0, count);
+
           const enrichedSummaryData = buildSummaryData(enrichedNormalizedPosts);
           const enrichedInsights = computeBasicInsights(enrichedSummaryData, enrichedFollowers, playbook);
 
@@ -656,7 +699,7 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
         .catch((enrichedErr: any) => {
           console.warn("[Data] Comment enrichment failed, continuing with baseline:", enrichedErr.message);
           return null;
-        });
+        }) : Promise.resolve(null);
 
       // ── STEP 4: AI Strategic Analysis ───────────────────────────────────
       if (enableAI === false) {
