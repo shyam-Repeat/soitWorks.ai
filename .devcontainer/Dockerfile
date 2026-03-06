@@ -19,9 +19,6 @@ RUN apt-get update && apt-get install -y unzip wget curl \
     && chmod +x /usr/local/bin/pocketbase \
     && rm pocketbase_0.22.10_linux_amd64.zip
 
-# Ensure Pip is up to date
-RUN pip3 install --upgrade pip
-
 # Create a place for browsers to be cached globally
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 RUN mkdir -p /home/node/.cache/ms-playwright && chown -R node:node /home/node/.cache/ms-playwright
