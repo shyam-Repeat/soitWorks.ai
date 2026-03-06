@@ -20,6 +20,6 @@
         5173,
         8090
     ],
-    "postCreateCommand": "npm install && pip3 install --break-system-packages -r requirements.txt && python3 -m patchright install --with-deps chromium",
+    "postCreateCommand": "npm install && pip3 install --break-system-packages -r requirements.txt && python3 -m playwright install --with-deps chromium && python3 -m patchright install chromium && scrapling install",
     "remoteUser": "node"
 }
