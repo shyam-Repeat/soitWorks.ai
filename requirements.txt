@@ -1,5 +1,5 @@
 scrapling[all]==0.4.1
-curl_cffi==0.14.0
+curl_cffi>=0.7.0
 playwright==1.49.1
 playwright-stealth
 patchright==1.49.1.0
