@@ -6,46 +6,46 @@ ENV PIP_BREAK_SYSTEM_PACKAGES=1
 # Install system dependencies for Chromium and Scraping
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     && apt-get -y install --no-install-recommends \
-        build-essential \
-        python3-pip \
-        python3-dev \
-        python3-venv \
-        python3-full \
-        libnss3 \
-        libnspr4 \
-        libatk1.0-0 \
-        libatk-bridge2.0-0 \
-        libcups2 \
-        libdrm2 \
-        libxkbcommon0 \
-        libxcomposite1 \
-        libxdamage1 \
-        libxext6 \
-        libxfixes3 \
-        libxrandr2 \
-        libgbm1 \
-        libasound2 \
-        libpangocairo-1.0-0 \
-        libpango-1.0-0 \
-        libcairo2 \
-        libfontconfig1 \
-        libxml2-dev \
-        libxslt-dev \
-        libharfbuzz0b \
-        libwayland-client0 \
-        libwayland-cursor0 \
-        libwayland-egl1 \
-        libx11-6 \
-        libx11-xcb1 \
-        libxcb1 \
-        libxcursor1 \
-        libxi6 \
-        libxkbcommon-x11-0 \
-        libxrender1 \
-        libxtst6 \
-        unzip \
-        wget \
-        curl \
+    build-essential \
+    python3-pip \
+    python3-dev \
+    python3-venv \
+    python3-full \
+    libnss3 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    libpangocairo-1.0-0 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libfontconfig1 \
+    libxml2-dev \
+    libxslt-dev \
+    libharfbuzz0b \
+    libwayland-client0 \
+    libwayland-cursor0 \
+    libwayland-egl1 \
+    libx11-6 \
+    libx11-xcb1 \
+    libxcb1 \
+    libxcursor1 \
+    libxi6 \
+    libxkbcommon-x11-0 \
+    libxrender1 \
+    libxtst6 \
+    unzip \
+    wget \
+    curl \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Set the default shell to bash
@@ -68,13 +68,7 @@ WORKDIR /workspaces/instainsight
 COPY requirements.txt ./
 COPY package.json package-lock.json* ./
 
-# Reset permissions so the node user can install things
-RUN chown -R node:node /workspaces/instainsight
-
-# Switch to node user for installs
-USER node
-
-# Install Python dependencies
+# Install Python dependencies as root
 RUN python3 -m pip install --no-cache-dir -r requirements.txt \
     && python3 -m playwright install --with-deps chromium \
     && python3 -m patchright install chromium \
