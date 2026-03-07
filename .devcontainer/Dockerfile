@@ -1,5 +1,8 @@
 FROM mcr.microsoft.com/devcontainers/typescript-node:20
 
+# Avoid 'externally-managed-environment' errors in Debian 12+
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+
 # Install system dependencies for Chromium and Scraping
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     && apt-get -y install --no-install-recommends \
@@ -7,6 +10,7 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
         python3-pip \
         python3-dev \
         python3-venv \
+        python3-full \
         libnss3 \
         libnspr4 \
         libatk1.0-0 \
@@ -39,14 +43,16 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
         libxkbcommon-x11-0 \
         libxrender1 \
         libxtst6 \
+        unzip \
+        wget \
+        curl \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Set the default shell to bash
 SHELL ["/bin/bash", "-c"]
 
 # Install PocketBase (Linux version)
-RUN apt-get update && apt-get install -y unzip wget curl \
-    && wget https://github.com/pocketbase/pocketbase/releases/download/v0.22.10/pocketbase_0.22.10_linux_amd64.zip \
+RUN wget https://github.com/pocketbase/pocketbase/releases/download/v0.22.10/pocketbase_0.22.10_linux_amd64.zip \
     && unzip pocketbase_0.22.10_linux_amd64.zip -d /usr/local/bin/ \
     && chmod +x /usr/local/bin/pocketbase \
     && rm pocketbase_0.22.10_linux_amd64.zip
@@ -62,14 +68,14 @@ WORKDIR /workspaces/instainsight
 COPY requirements.txt ./
 COPY package.json package-lock.json* ./
 
-# Reset permissions so the node user can install things if needed later
+# Reset permissions so the node user can install things
 RUN chown -R node:node /workspaces/instainsight
 
-# Switch to node user for installs to follow devcontainer best practices
+# Switch to node user for installs
 USER node
 
-# Install dependencies during build
-RUN python3 -m pip install --no-cache-dir --break-system-packages -r requirements.txt \
+# Install Python dependencies
+RUN python3 -m pip install --no-cache-dir -r requirements.txt \
     && python3 -m playwright install --with-deps chromium \
     && python3 -m patchright install chromium \
     && scrapling install
