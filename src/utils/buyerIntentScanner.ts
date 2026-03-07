@@ -9,7 +9,7 @@
 // ─── KEYWORD BANKS ───────────────────────────────────────────────────────────
 
 const PRICE_SIGNALS = [
-    "price", "cost", "how much", "rate", "pricing", "kitna", "kiti",
+    "price", "cost", "how much", "rate", "pricing", "kitna", "kiti", "kimat", "keemat", "bhav", "moll", "evalavu", "vilai",
     "charges", "fees", "budget", "affordable", "expensive", "worth it",
     "₹", "rs.", "inr",
 ];
@@ -20,8 +20,8 @@ const AVAILABILITY_SIGNALS = [
 ];
 
 const PURCHASE_SIGNALS = [
-    "where to buy", "how to buy", "purchase", "want this", "i need this",
-    "dm me", "dm'd you", "sent dm", "whatsapp", "contact", "website",
+    "where to buy", "how to buy", "purchase", "want this", "i need this", "lena hai", "chahiye", "kharedna",
+    "dm me", "dm'd you", "sent dm", "whatsapp", "contact", "website", "dm karo", "dm kiya",
     "link", "shop now", "add to cart", "shipping", "deliver", "cod",
     "cash on delivery", "online order",
 ];
@@ -118,11 +118,18 @@ export function scanBuyerIntent(posts: any[]): BuyerIntentResult {
                 signalCounts[signal] = (signalCounts[signal] || 0) + 1;
             }
 
-            if (commentScore > 0 && typeof comment !== "string" && comment.ownerUsername) {
-                const username = comment.ownerUsername;
+            const isRealUser = typeof comment !== "string" && comment.ownerUsername && comment.ownerUsername !== "unknown";
+            
+            // If it's a real user and we found signals, or if it's a real user in another language (detected by length/context)
+            if (isRealUser) {
+                const username = comment.ownerUsername!;
                 const existing = clientMap.get(username);
-                if (!existing || commentScore > existing.intentScore) {
-                    clientMap.set(username, { username, comment: text, intentScore: commentScore });
+                
+                // If no signals but it's a real user, give it a baseline "potential" score
+                const finalCommentScore = commentScore > 0 ? commentScore : 0.5;
+
+                if (!existing || finalCommentScore > existing.intentScore) {
+                    clientMap.set(username, { username, comment: text, intentScore: finalCommentScore });
                 }
             }
         }

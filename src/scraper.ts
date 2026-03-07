@@ -102,7 +102,7 @@ export async function scrapeInstagramProfile(
         // or empty, trigger Apify fallback
         if (resultItems.length === 0 || (resultItems.length === 1 && !resultItems[0].type)) {
             console.warn(`[Scrapling] Only basic metadata extracted (likely 302 login wall). Triggering Apify fallback...`);
-            return await scrapeWithApify(username, count);
+            return await scrapeWithApify(username, count, includeComments);
         }
 
         return resultItems;
@@ -110,15 +110,15 @@ export async function scrapeInstagramProfile(
     } catch (error: any) {
         console.error(`[Scraper] Scrapling engine failed:`, error.message);
         console.log(`[Scraper] Falling back to Apify due to Scrapling failure...`);
-        return await scrapeWithApify(username, count);
+        return await scrapeWithApify(username, count, includeComments);
     }
 }
 
 /**
  * Fallback scraping using official Apify API
  */
-async function scrapeWithApify(username: string, count: number): Promise<any[]> {
-    console.log(`[Apify] Starting fallback data extraction for: ${username}`);
+async function scrapeWithApify(username: string, count: number, includeComments: boolean): Promise<any[]> {
+    console.log(`[Apify] Starting fallback data extraction for: ${username} (Count: ${count}, Comments: ${includeComments})`);
 
     if (!process.env.APIFY_API_TOKEN) {
         throw new Error("Cannot run Apify fallback: APIFY_API_TOKEN is not defined in the environment.");
@@ -128,14 +128,20 @@ async function scrapeWithApify(username: string, count: number): Promise<any[]> 
         token: process.env.APIFY_API_TOKEN,
     });
 
+    // Use apify/instagram-scraper instead of profile scraper to get exactly N items including reels
     const input = {
-        usernames: [username],
-        resultsLimit: count,
+        "directUrls": [`https://www.instagram.com/${username}/`],
+        "resultsLimit": count,
+        "resultsType": "posts",
+        "searchType": "user",
+        "searchLimit": 1,
+        "addParentData": true, // This ensures we get followersCount, biography etc.
+        "includeComments": includeComments,
     };
 
     try {
-        console.log(`[Apify] Calling apify/instagram-profile-scraper...`);
-        const run = await client.actor("apify/instagram-profile-scraper").call(input);
+        console.log(`[Apify] Calling apify/instagram-scraper...`);
+        const run = await client.actor("apify/instagram-scraper").call(input);
 
         console.log(`[Apify] Fetching results from dataset ${run.defaultDatasetId}...`);
         const { items } = await client.dataset(run.defaultDatasetId).listItems();
@@ -145,49 +151,30 @@ async function scrapeWithApify(username: string, count: number): Promise<any[]> 
             return [];
         }
 
-        const profile: any = items[0];
-        const posts = profile.latestPosts || [];
-        const stories = profile.latestStories || [];
+        console.log(`[Apify] Found ${items.length} items.`);
 
-        console.log(`[Apify] Found ${posts.length} posts and ${stories.length} stories.`);
+        // Map items to our internal format
+        const formattedItems = items.map((item: any) => {
+            const owner = item.owner || {};
+            // Instagram Scraper labels Reels as 'Video' or sometimes 'clips' in productType
+            let type = item.type || (item.productType === 'clips' ? 'Video' : (item.isVideo ? "Video" : "Image"));
+            
+            return {
+                ...item,
+                type: type,
+                ownerUsername: item.ownerUsername || owner.username || username,
+                ownerFullName: item.ownerFullName || owner.fullName || "",
+                followersCount: item.followersCount ?? owner.followersCount ?? 0,
+                followsCount: item.followsCount ?? owner.followsCount ?? 0,
+                postsCount: item.postsCount ?? owner.postsCount ?? 0,
+                profilePicUrl: item.profilePicUrl ?? owner.profilePicUrl ?? "",
+                biography: item.biography ?? owner.biography ?? "",
+                isBusinessAccount: item.isBusinessAccount ?? owner.isBusinessAccount ?? false,
+                businessCategoryName: item.businessCategoryName ?? owner.businessCategoryName ?? "",
+            };
+        });
 
-        // Map posts
-        const formattedPosts = posts.map((post: any) => ({
-            ...post,
-            type: post.type || (post.isVideo ? "Video" : "Image"),
-            ownerUsername: profile.username || profile.ownerUsername,
-            ownerFullName: profile.fullName || profile.ownerFullName,
-            followersCount: profile.followersCount,
-            followsCount: profile.followsCount,
-            postsCount: profile.postsCount,
-            profilePicUrl: profile.profilePicUrl,
-            biography: profile.biography || "",
-            businessCategoryName: profile.businessCategoryName || profile.categoryName,
-            isBusinessAccount: profile.isBusinessAccount,
-        }));
-
-        // Map stories
-        const formattedStories = stories.map((story: any) => ({
-            ...story,
-            type: "Story",
-            ownerUsername: profile.username || profile.ownerUsername,
-            ownerFullName: profile.fullName || profile.ownerFullName,
-            followersCount: profile.followersCount,
-            followsCount: profile.followsCount,
-            postsCount: profile.postsCount,
-            profilePicUrl: profile.profilePicUrl,
-            biography: profile.biography || "",
-            businessCategoryName: profile.businessCategoryName || profile.categoryName,
-            isBusinessAccount: profile.isBusinessAccount,
-        }));
-
-        const combinedItems = [...formattedPosts, ...formattedStories];
-
-        // Respect the count requested limit
-        const finalItems = combinedItems.slice(0, count);
-
-        console.log(`[Apify] Extracted and formatted ${finalItems.length} items from Apify.`);
-        return finalItems;
+        return formattedItems.slice(0, count);
     } catch (err: any) {
         console.error(`[Apify] Fallback failed:`, err.message);
         throw new Error(`Both Scrapling and Apify fallback failed for ${username}: ${err.message}`);

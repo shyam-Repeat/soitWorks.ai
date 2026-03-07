@@ -22,14 +22,14 @@ export const AccountHealth: React.FC<AccountHealthProps> = ({
     ]
 }) => {
     return (
-        <div className="brutalist-card p-8 flex flex-col items-center h-full !bg-white">
+        <div className="brutalist-card p-6 sm:p-8 flex flex-col items-center h-full !bg-white">
             <h4 className="text-sm font-black text-black uppercase tracking-widest mb-8 border-b-4 border-black pb-2 w-full text-center">
                 Account Health
             </h4>
 
-            <div className="relative w-48 h-48 mb-8 border-8 border-black rounded-full flex items-center justify-center bg-accent shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+            <div className="relative w-32 h-32 sm:w-48 sm:h-48 mb-6 sm:mb-8 border-8 border-black rounded-full flex items-center justify-center bg-accent shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] sm:shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
                 <div className="text-center">
-                    <span className="text-6xl font-black text-black tracking-tighter">{score}</span>
+                    <span className="text-4xl sm:text-6xl font-black text-black tracking-tighter">{score}</span>
                     <p className="brutalist-label">Score</p>
                 </div>
                 {/* Decorative border elements */}
@@ -37,7 +37,7 @@ export const AccountHealth: React.FC<AccountHealthProps> = ({
                 <div className="absolute -bottom-2 -left-2 w-6 h-6 bg-black" />
             </div>
 
-            <div className="w-full space-y-6">
+            <div className="w-full space-y-4 sm:space-y-6">
                 {metrics.map((m, i) => (
                     <div key={i} className="space-y-2">
                         <div className="flex justify-between text-[11px] font-black tracking-widest uppercase">

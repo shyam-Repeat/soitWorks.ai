@@ -127,7 +127,7 @@ export const NextPostPlan: React.FC<NextPostPlanProps> = ({
     };
 
     return (
-        <div className="brutalist-card p-8 flex flex-col h-full !bg-white">
+        <div className="brutalist-card p-5 sm:p-8 flex flex-col h-full !bg-white">
             <div className="flex justify-between items-start mb-6">
                 <span className="pill-badge !bg-accent !text-black !border-black scale-110 origin-left !shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
                     NEXT POST PLAN
@@ -155,14 +155,14 @@ export const NextPostPlan: React.FC<NextPostPlanProps> = ({
             </div>
 
             <div className="border-t-4 border-black pt-6">
-                <h3 className="text-3xl font-black text-black mb-2 tracking-tighter uppercase">{plan.topic}</h3>
+                <h3 className="text-2xl sm:text-3xl font-black text-black mb-2 tracking-tighter uppercase">{plan.topic}</h3>
 
                 <div className="flex items-center gap-3 text-xs font-black text-black/80 mb-6 uppercase tracking-widest">
                     <Clock size={14} className="text-black" />
                     <span>{plan.time} · {plan.type} {plan.collab && "· Collab"}</span>
                 </div>
 
-                <div className="flex-1 bg-white border-4 border-black p-6 space-y-6 mb-8 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] overflow-y-auto max-h-[400px]">
+                <div className="flex-1 bg-white border-4 border-black p-4 sm:p-6 space-y-5 sm:space-y-6 mb-6 sm:mb-8 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] overflow-y-auto max-h-[300px] sm:max-h-[400px]">
                     <div className="relative group">
                         <div className="flex justify-between items-center mb-2">
                             <span className="brutalist-label">HOOK</span>

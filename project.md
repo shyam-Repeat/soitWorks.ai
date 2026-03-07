@@ -61,7 +61,8 @@ Our proprietary analysis framework implements:
    GEMINI_API_KEY=your_key
    APIFY_API_TOKEN=your_token (optional fallback)
    ```
-2. **Launch PocketBase:**
+2. **Instagram Cookies:** Place `instagram_cookies.json` in the root directory for the local scraper to bypass login walls.
+3. **Launch PocketBase:**
    - Run `pocketbase serve` (on port 8090).
 3. **Launch Application:**
    - Run `npm run dev` (Starts both App and Backend).

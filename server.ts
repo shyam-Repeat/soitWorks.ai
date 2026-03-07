@@ -568,6 +568,22 @@ PRODUCT TYPE RULES (apply automatically):
 - Indo-western / Western / Fusion → dynamic pose, lifestyle setting, natural light or urban background  
 - Kurta / Suit → three-quarter body, clean minimal background, soft daylight
 
+QUALITY RULES
+- Single adult Indian female model
+- Product clearly visible and well lit
+- Natural skin tones and fabric textures
+- Clean minimal background
+- Avoid celebrities and camera gear (Canon, Sony etc.)
+- Avoid clutter and overly cinematic terms
+
+SAFETY RULES
+Avoid policy-triggering content:
+- No celebrities or real public figures
+- No minors (always adult model)
+- No sexualized or revealing descriptions
+- No copyrighted characters or brand names
+- No political or religious sensitive themes
+
 OUTPUT FORMAT (strictly this only):
 Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
 
@@ -596,9 +612,13 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
     if (!username) return res.status(400).json({ error: "Username is required" });
 
     try {
-      // ── STEP 1: Scrape latest content with configurable type and count ───
+      // ── STEP 1: Scrape latest content ──
+      // Consolidate into ONE call with includeComments=true to avoid double browser launch 
       const existingPostIds = existingPosts.map((p: any) => p.shortCode || p.id).filter(Boolean);
-      const items = await scrapeInstagramProfile(username, contentType, count, false, existingPostIds);
+      
+      console.log(`[Scraper] Starting single-pass extraction for ${username}...`);
+      // Always include comments for now to populate the dashboard correctly
+      const items = await scrapeInstagramProfile(username, contentType, count, true, existingPostIds);
 
       if ((!items || items.length === 0) && existingPosts.length === 0) {
         return res.status(404).json({
@@ -608,7 +628,7 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
         });
       }
 
-      // Profile extraction - prefer new items if available, else existing
+      // Profile extraction
       const first: any = items.length > 0 ? items[0] : (existingPosts.length > 0 ? existingPosts[0] : {});
       const pInfo = first?.owner || first?.user || {};
       const fCount = pInfo.followersCount ?? pInfo.followers ?? first.followersCount ?? 0;
@@ -624,7 +644,7 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
         biography: first.biography || pInfo.biography || "",
       };
 
-      // 1. Detect Niche via Playbooks (Early detection so computeBasicInsights can use it)
+      // 1. Detect Niche via Playbooks
       const { playbook, nicheKey } = detectNiche(userProfile);
 
       // ── STEP 2: Normalize and Enhance ────────────────────────────────────
@@ -650,9 +670,8 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
 
       // ── STEP 3: Basic Baseline Dashboard ────────────────────────────────
       const basicInsights = computeBasicInsights(summaryData, fCount, playbook);
-      console.log(`[Data] Computed baseline with ${fCount} followers.`);
-
-      // Stream the first chunk immediately to render initial dashboard
+      
+      // Stream the response back
       res.setHeader("Content-Type", "application/x-ndjson");
       res.write(JSON.stringify({
         type: "basic",
@@ -667,68 +686,9 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
         }
       }) + "\n");
 
-      // For enriched promise, only re-scrape if there are new items that need comments
-      const enrichedPromise = items.length > 0 ? scrapeInstagramProfile(username, contentType, count, true, existingPostIds)
-        .then((enrichedItems: any[]) => {
-          if (!enrichedItems || enrichedItems.length === 0) {
-            return null;
-          }
-
-          const enrichedFirst: any = enrichedItems[0];
-          const enrichedPInfo = enrichedFirst?.owner || enrichedFirst?.user || {};
-          const enrichedFollowers = enrichedPInfo.followersCount ?? enrichedPInfo.followers ?? enrichedFirst.followersCount ?? fCount;
-          const newlyEnrichedNormalizedPosts = normalizePosts(enrichedItems);
-
-          const enrichedAllMap = new Map();
-          existingPosts.forEach((p: any) => enrichedAllMap.set(p.shortCode || p.id, p));
-          newlyEnrichedNormalizedPosts.forEach((p: any) => {
-            const key = p.shortCode || p.id;
-            if (enrichedAllMap.has(key)) {
-              const existing = enrichedAllMap.get(key);
-              if (!p.latestComments || p.latestComments.length === 0) {
-                p.latestComments = existing.latestComments || existing.latest_comments || [];
-              }
-            }
-            enrichedAllMap.set(key, p);
-          });
-
-          const enrichedNormalizedPosts = Array.from(enrichedAllMap.values())
-            .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-            .slice(0, count);
-
-          const enrichedSummaryData = buildSummaryData(enrichedNormalizedPosts);
-          const enrichedInsights = computeBasicInsights(enrichedSummaryData, enrichedFollowers, playbook);
-
-          return {
-            posts: enrichedNormalizedPosts,
-            summaryData: enrichedSummaryData,
-            insights: enrichedInsights,
-            followers: enrichedFollowers,
-            rawItems: enrichedItems.length
-          };
-        })
-        .catch((enrichedErr: any) => {
-          console.warn("[Data] Comment enrichment failed, continuing with baseline:", enrichedErr.message);
-          return null;
-        }) : Promise.resolve(null);
-
       // ── STEP 4: AI Strategic Analysis ───────────────────────────────────
       if (enableAI === false) {
         console.log("[AI] Skipping AI analysis as requested by user.");
-        const enrichedData = await enrichedPromise;
-        if (enrichedData) {
-          res.write(JSON.stringify({
-            type: "enriched",
-            data: {
-              posts: enrichedData.posts,
-              insights: enrichedData.insights,
-              dev: {
-                summaryData: enrichedData.summaryData,
-                rawItems: enrichedData.rawItems
-              }
-            }
-          }) + "\n");
-        }
         return res.end();
       }
 
@@ -738,26 +698,11 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
       // 1. Log Niche (Already detected early)
       console.log(`[AI] Niche dynamically selected: ${playbook.nicheLabel} (${nicheKey})`);
 
-      const enrichedData = await enrichedPromise;
-      const aiSummaryData = enrichedData?.summaryData || summaryData;
-      const aiInsightsBase = enrichedData?.insights || basicInsights;
-      const aiFollowerCount = enrichedData?.followers || fCount;
-
-      if (enrichedData) {
-        res.write(JSON.stringify({
-          type: "enriched",
-          data: {
-            posts: enrichedData.posts,
-            insights: enrichedData.insights,
-            dev: {
-              summaryData: enrichedData.summaryData,
-              rawItems: enrichedData.rawItems
-            }
-          }
-        }) + "\n");
-      }
-
       // 2. Prepare Minimal Data for AI (Block 1: Account Snapshot)
+      const aiInsightsBase = basicInsights;
+      const aiSummaryData = summaryData;
+      const aiFollowerCount = fCount;
+
       const postMixStr = `${aiInsightsBase.account_summary.image_count} Images, ${aiInsightsBase.account_summary.reel_count} Reels`;
       const accountSnapshot = `@${userProfile.username} | Niche: ${playbook.nicheLabel} | Followers: ${aiFollowerCount} | Avg Likes: ${aiInsightsBase.account_summary.avg_likes} | Avg Views: ${aiInsightsBase.account_summary.avg_views} | Best Hour: ${aiInsightsBase.account_summary.best_hour} | Account Score: ${aiInsightsBase.account_score}/100 | Buyer Intent: ${aiInsightsBase.buyer_intent_score}% | Post Mix: ${postMixStr}`;
 
@@ -937,7 +882,7 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
     const postMixStr = `${basicInsights.account_summary.image_count} Images, ${basicInsights.account_summary.reel_count} Reels`;
     const accountSnapshot = `@${userProfile.username} | Niche: ${effectivePlaybook?.nicheLabel || 'Fashion'} | Followers: ${followers} | Avg Likes: ${basicInsights.account_summary.avg_likes} | Avg Views: ${basicInsights.account_summary.avg_views}`;
 
-    const sortedSummaryPosts = [summaryData].sort((a, b) => {
+    const sortedSummaryPosts = [...safeSummaryData].sort((a, b) => {
       const scoreA = a.type === "Video" ? a.view_count : a.like_count + a.comments_count;
       const scoreB = b.type === "Video" ? b.view_count : b.like_count + b.comments_count;
       return scoreB - scoreA;

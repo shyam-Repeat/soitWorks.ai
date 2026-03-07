@@ -388,7 +388,7 @@ export default function App() {
   }, [data, username]);
 
   return (
-    <div className="min-h-screen font-sans selection:bg-primary/30 selection:text-white pb-12">
+    <div className="min-h-screen font-sans selection:bg-primary/30 selection:text-white pb-12 overflow-x-hidden">
       {/* Auth Modal */}
       <AuthModal
         isOpen={showAuthModal}
@@ -420,13 +420,13 @@ export default function App() {
       {/* Persistent Auth/User Bar (Top Right) */}
       <div className="fixed top-8 right-8 z-[60] flex items-center gap-4">
         {authUser ? (
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 px-4 py-2 bg-white border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
-              <div className="w-8 h-8 bg-accent border-2 border-black flex items-center justify-center">
-                <User size={16} className="text-black" />
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="flex items-center gap-2 px-3 sm:px-4 py-1.5 sm:py-2 bg-white border-4 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+              <div className="w-6 h-6 sm:w-8 sm:h-8 bg-accent border-2 border-black flex items-center justify-center">
+                <User size={12} className="sm:size-[16px] text-black" />
               </div>
               <div className="flex flex-col">
-                <span className="text-[10px] font-black uppercase leading-tight tracking-wider">
+                <span className="text-[8px] sm:text-[10px] font-black uppercase leading-tight tracking-wider">
                   {authUser.name || authUser.email.split('@')[0]}
                 </span>
                 {activeTab !== 'dashboard' && (
@@ -453,10 +453,10 @@ export default function App() {
         ) : (
           <button
             onClick={() => setShowAuthModal(true)}
-            className="brutalist-button !px-6 !py-3 !bg-white !text-black flex items-center gap-2 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] hover:shadow-[10px_10px_0px_0px_rgba(0,0,0,1)]"
+            className="brutalist-button !px-4 sm:!px-6 !py-2 sm:!py-3 !bg-white !text-black flex items-center gap-2 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] sm:shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] hover:shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]"
           >
-            <User size={18} />
-            <span className="text-xs font-black uppercase tracking-widest">Login / Join</span>
+            <User size={16} className="sm:size-[18px]" />
+            <span className="text-[10px] sm:text-xs font-black uppercase tracking-widest whitespace-nowrap">Login / Join</span>
           </button>
         )}
       </div>
@@ -485,10 +485,10 @@ export default function App() {
                     <Activity size={48} className="text-black" />
                   </motion.div>
                 </div>
-                <h1 className="text-8xl font-black text-black tracking-tighter uppercase leading-none">
-                  So-IT<span className="text-accent" style={{ WebkitTextStroke: '4px black' }}>Works.ai</span>
+                <h1 className="text-5xl sm:text-7xl md:text-8xl font-black text-black tracking-tighter uppercase leading-none px-4">
+                  So-IT<span className="text-accent" style={{ WebkitTextStroke: '2px sm:4px black' }}>Works.ai</span>
                 </h1>
-                <p className="text-black font-black text-xl uppercase tracking-[0.2em]">Next-Gen Social Intelligence Engine</p>
+                <p className="text-black font-black text-sm sm:text-lg md:text-xl uppercase tracking-[0.2em] px-4">Next-Gen Social Intelligence Engine</p>
               </motion.div>
 
               <motion.div
@@ -498,19 +498,19 @@ export default function App() {
                 className="max-w-2xl mx-auto"
               >
                 <form onSubmit={handleSearch} className="space-y-8">
-                  <div className="relative group">
-                    <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-black" size={24} />
+                  <div className="relative group px-4">
+                    <Search className="absolute left-8 sm:left-6 top-1/2 -translate-y-1/2 text-black" size={20} />
                     <input
                       type="text"
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
                       placeholder="Enter Profile Username..."
-                      className="brutalist-input pl-16 pr-40 bg-white"
+                      className="brutalist-input pl-12 sm:pl-16 pr-28 sm:pr-40 bg-white !text-base sm:!text-xl"
                     />
                     <button
                       type="submit"
                       disabled={!username.trim()}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 brutalist-button !px-6 !py-2 !text-xs"
+                      className="absolute right-6 sm:right-3 top-1/2 -translate-y-1/2 brutalist-button !px-4 sm:!px-6 !py-1.5 sm:!py-2 !text-[10px] sm:!text-xs"
                     >
                       IDENTIFY
                     </button>
@@ -629,11 +629,11 @@ export default function App() {
 
       {/* Main Dashboard Layout */}
       {data && dashboardData && (
-        <main className="max-w-7xl mx-auto px-6 py-12 animate-in fade-in duration-1000">
-          <header className="flex flex-col md:flex-row justify-between items-center mb-12 gap-8 border-b-8 border-black pb-12">
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-12 animate-in fade-in duration-1000">
+          <header className="flex flex-col md:flex-row justify-between items-center mb-8 sm:mb-12 gap-6 sm:gap-8 border-b-8 border-black pb-8 sm:pb-12 text-center md:text-left">
             <div>
-              <h1 className="text-5xl font-black text-black tracking-tighter uppercase leading-none">So-It Works.ai<span className="text-accent underline decoration-black decoration-8 underline-offset-8">.</span></h1>
-              <p className="text-black/60 text-[10px] font-black uppercase tracking-[0.4em] mt-4">Social Intelligence AI for Businesses</p>
+              <h1 className="text-3xl sm:text-4xl md:text-5xl font-black text-black tracking-tighter uppercase leading-none">So-It Works.ai<span className="text-accent underline decoration-black decoration-8 underline-offset-8">.</span></h1>
+              <p className="text-black/60 text-[8px] sm:text-[10px] font-black uppercase tracking-[0.4em] mt-3 sm:mt-4">Social Intelligence AI for Businesses</p>
             </div>
 
             {aiLoading && (
@@ -649,8 +649,8 @@ export default function App() {
               </motion.div>
             )}
 
-            {/* Tab Switcher */}
-            <div className="flex bg-white border-4 border-black p-1 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] relative z-10 transition-all hover:shadow-[12px_12px_0px_0px_rgba(0,0,0,1)]">
+            {/* Tab Switcher - Scrollable on mobile */}
+            <div className="flex bg-white border-4 border-black p-1 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] sm:shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] relative z-10 transition-all hover:shadow-[10px_10px_0px_0px_rgba(0,0,0,1)] overflow-x-auto no-scrollbar max-w-full">
               {[
                 { id: 'dashboard', label: 'Dashboard' },
                 { id: 'actions', label: 'Action Cards' },
@@ -662,7 +662,7 @@ export default function App() {
                   onClick={() => {
                     setActiveTab(tab.id as any);
                   }}
-                  className={`relative px-8 py-3 text-xs font-black uppercase tracking-[0.2em] transition-all z-10 ${activeTab === tab.id ? 'text-black' : 'text-black/60 hover:text-black/80'}`}
+                  className={`relative px-4 sm:px-8 py-2.5 sm:py-3 text-[10px] sm:text-xs font-black uppercase tracking-[0.15em] sm:tracking-[0.2em] transition-all z-10 whitespace-nowrap ${activeTab === tab.id ? 'text-black' : 'text-black/60 hover:text-black/80'}`}
                 >
                   {activeTab === tab.id && (
                     <motion.div
@@ -699,18 +699,18 @@ export default function App() {
                   <button
                     onClick={handleSave}
                     disabled={saving}
-                    className={`brutalist-button !px-6 !py-3 flex items-center gap-2 transition-all ${saveSuccess
+                    className={`brutalist-button !px-4 sm:!px-6 !py-2.5 sm:!py-3 flex items-center gap-2 transition-all ${saveSuccess
                       ? '!bg-emerald-500 !text-white !border-emerald-700'
-                      : '!bg-accent !text-black hover:!shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]'
+                      : '!bg-accent !text-black hover:!shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] sm:hover:!shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]'
                       }`}
                     title="Save analysis to your account"
                   >
                     {saving ? (
-                      <Loader2 size={16} className="animate-spin" />
+                      <Loader2 size={14} className="sm:size-[16px] animate-spin" />
                     ) : (
-                      <Save size={16} />
+                      <Save size={14} className="sm:size-[16px]" />
                     )}
-                    <span className="text-[10px] font-black uppercase tracking-widest">
+                    <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest">
                       {saveSuccess ? 'Saved!' : saving ? 'Saving...' : 'Save'}
                     </span>
                   </button>

@@ -202,7 +202,7 @@ def filter_items(items, content_type):
         return [i for i in items if i.get("type") == "Image"]
     return items
 
-def scrape_instagram(username, count=15, cookie_path=None, content_type="all", include_comments=True, existing_posts=None):
+def scrape_instagram(username, count=20, cookie_path=None, content_type="all", include_comments=True, existing_posts=None):
     if existing_posts is None:
         existing_posts = set()
     print(f"[Scrapling] Targeting {username} for {count} items... (Skipping {len(existing_posts)} existing)", file=sys.stderr)
@@ -216,7 +216,10 @@ def scrape_instagram(username, count=15, cookie_path=None, content_type="all", i
         nonlocal last_page_info
         last_page_info = pinfo
         for it in new_items:
-            items_map[it['id']] = it
+            # Only log if it's actually new
+            if it['id'] not in items_map:
+                items_map[it['id']] = it
+                # Optional: print(f"[Scrapling] New item: {it['id']}", file=sys.stderr)
 
     # Step 1: Headless session to handle everything
     def run_browser(page):
@@ -227,13 +230,19 @@ def scrape_instagram(username, count=15, cookie_path=None, content_type="all", i
                     return
                 url = response.url
 
+                # Capture profile info from network responses
                 if "graphql/query" in url or "web_profile_info" in url:
                     body = response.json()
                     if isinstance(body, dict):
                         items, pinfo, _ = map_to_apify_format(body, username_context=username)
-                        update_items(items, pinfo)
+                        if items:
+                            # Avoid duplicate logging
+                            new_count = len([i for i in items if i['id'] not in items_map])
+                            if new_count > 0:
+                                print(f"[Scrapling] Caught data from network: {new_count} new items", file=sys.stderr)
+                            update_items(items, pinfo)
                 
-                # While viewing a specific post/reel, capture comments from network JSON.
+                # Capture comments (can also appear in network JSON)
                 if active_post["shortCode"] and (
                     "graphql/query" in url
                     or "/comments/" in url
@@ -243,28 +252,46 @@ def scrape_instagram(username, count=15, cookie_path=None, content_type="all", i
                     extracted = extract_comments_from_payload(body)
                     if extracted:
                         network_comments.extend(extracted)
-            except Exception as e:
-                print(f"[Scrapling] Response parse error: {e}", file=sys.stderr)
+            except: pass
         
         page.on("response", on_response)
-
-        if session_cookies:
-            try:
-                page.context.add_cookies(session_cookies)
-                page.reload(wait_until="networkidle")
-                print(f"[Scrapling] Loaded {len(session_cookies)} cookies into browser context.", file=sys.stderr)
-            except Exception as e:
-                print(f"[Scrapling] Cookie injection failed: {e}", file=sys.stderr)
+        if include_comments:
+            print("[Scrapling] Comment extractor initialized and monitoring network...", file=sys.stderr)
         
-        # Initial wait
-        time.sleep(1.5)
+        # Human-like initial delay
+        time.sleep(3.5)
+
+        # LOGINLESS FALLBACK: If network intercept missed the initial payload, 
+        # try extracting from the scripts injected in the HTML.
+        if not items_map:
+            try:
+                print("[Scrapling] Checking HTML script tags for initial payload...", file=sys.stderr)
+                script_content = page.evaluate('''() => {
+                    const scripts = Array.from(document.querySelectorAll('script'));
+                    // Look for segments commonly found in shared data or initial data
+                    return scripts.find(s => s.textContent.includes('profile_pic_url') || s.textContent.includes('edge_owner_to_timeline_media'))?.textContent || "";
+                }''')
+                if script_content:
+                    # Look for JSON structure in the script
+                    match = re.search(r'(\{.*\})', script_content)
+                    if match:
+                        data = json.loads(match.group(1))
+                        items, pinfo, _ = map_to_apify_format(data, username_context=username)
+                        if items:
+                            print(f"[Scrapling] Caught data from HTML: {len(items)} items", file=sys.stderr)
+                            update_items(items, pinfo)
+            except Exception as e:
+                print(f"[Scrapling] HTML fallback error: {e}", file=sys.stderr)
         
         # Scroll loop
         max_scrolls = 20 if count > 6 else 8
         stale_rounds = 0
         hit_existing = False
+        
+        current_items = items_map 
+
         for i in range(max_scrolls):
-            if len(items_map) >= count: break
+            if len(current_items) >= count: break
             
             # Check if we hit an existing post
             for it in items_map.values():
@@ -275,40 +302,43 @@ def scrape_instagram(username, count=15, cookie_path=None, content_type="all", i
             if hit_existing:
                 break
 
-            before = len(items_map)
+            before = len(current_items)
+            # More natural scrolling
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(1.2)
-            page.evaluate("window.scrollBy(0, -500)")
-            time.sleep(0.6)
-            after = len(items_map)
+            time.sleep(1.5)
+            page.evaluate("window.scrollBy(0, -200)")
+            time.sleep(0.5)
+            
+            after = len(current_items)
             if after <= before:
                 stale_rounds += 1
             else:
                 stale_rounds = 0
-            if stale_rounds >= 3:
+            if stale_rounds >= 4: # Be more patient
                 break
-            if i % 5 == 0: print(f"[Scrapling] Scroll {i}: Found {len(items_map)} items", file=sys.stderr)
+            if i % 3 == 0: print(f"[Scrapling] Scroll {i}: Total {len(current_items)} items captured", file=sys.stderr)
 
         if include_comments:
             # Comment extraction
-            print("[Scrapling] Extracting comments...", file=sys.stderr)
-            sorted_items = sorted(items_map.values(), key=lambda x: x['timestamp'], reverse=True)
-            for it in sorted_items[:count]:
+            print(f"[Scrapling] Extracting comments for {min(len(current_items), count)} posts...", file=sys.stderr)
+            sorted_items = sorted(list(current_items.values()), key=lambda x: x['timestamp'], reverse=True)
+            for it in sorted_items[0:count]:
                 if it.get('shortCode') in existing_posts or it.get('id') in existing_posts:
-                    print(f"[Scrapling] Skipping comment extraction for existing post: {it.get('shortCode')}", file=sys.stderr)
                     continue
 
                 try:
                     active_post["shortCode"] = it.get("shortCode")
                     network_comments.clear()
 
-                    page.goto(it['url'], wait_until="networkidle")
-                    time.sleep(3)
+                    # Navigation with slightly longer timeout
+                    page.goto(it['url'], wait_until="domcontentloaded", timeout=45000)
+                    time.sleep(2.5)
 
                     # Try opening more comments if a button is visible.
-                    page.evaluate('''() => {
+                    # FIXED: Added async to the evaluator function
+                    page.evaluate('''async () => {
                         const wanted = [/view all/i, /more comments/i, /view more/i, /load more/i];
-                        for (let i = 0; i < 4; i++) {
+                        for (let i = 0; i < 5; i++) {
                             const buttons = Array.from(document.querySelectorAll('button'));
                             const btn = buttons.find(b => {
                                 const t = (b.innerText || '').trim();
@@ -316,11 +346,13 @@ def scrape_instagram(username, count=15, cookie_path=None, content_type="all", i
                             });
                             if (!btn) break;
                             btn.click();
+                            await new Promise(resolve => setTimeout(resolve, 1500));
                         }
                     }''')
                     time.sleep(2)
 
-                    comment_objs = network_comments[:10]
+                    MAX_COMMENTS = 50
+                    comment_objs = network_comments[0:MAX_COMMENTS]
                     if not comment_objs or len(comment_objs) < 3:
                         # Fallback 1: Embedded JSON scripts (often present in unauthenticated view)
                         script_comments = page.evaluate('''() => {
@@ -336,13 +368,13 @@ def scrape_instagram(username, count=15, cookie_path=None, content_type="all", i
                                     for ec in extracted:
                                         if not any(co['text'] == ec['text'] for co in comment_objs):
                                             comment_objs.append(ec)
-                                            if len(comment_objs) >= 10: break
+                                            if len(comment_objs) >= MAX_COMMENTS: break
                             except: pass
-                            if len(comment_objs) >= 10: break
+                            if len(comment_objs) >= MAX_COMMENTS: break
 
                     if not comment_objs:
                         # Fallback 2: DOM fallback when everything else fails.
-                        comment_objs = page.evaluate('''() => {
+                        comment_objs = page.evaluate('''(max_c) => {
                             const out = [];
                             const seen = new Set();
                             const ban = [/^follow$/i, /^reply$/i, /^liked by/i, /^view replies/i];
@@ -365,13 +397,13 @@ def scrape_instagram(username, count=15, cookie_path=None, content_type="all", i
                                 if (seen.has(key)) continue;
                                 seen.add(key);
                                 out.push({ text, ownerUsername });
-                                if (out.length >= 10) break;
+                                if (out.length >= max_c) break;
                             }
                             return out;
-                        }''') or []
+                        }''', MAX_COMMENTS) or []
 
                     if comment_objs:
-                        it['latestComments'] = comment_objs[:10]
+                        it['latestComments'] = comment_objs[0:MAX_COMMENTS]
                         print(f"[Scrapling] Captured {len(it['latestComments'])} comments for {it.get('shortCode')}", file=sys.stderr)
                     else:
                         print(f"[Scrapling] No comments captured for {it.get('shortCode')}", file=sys.stderr)
@@ -381,13 +413,16 @@ def scrape_instagram(username, count=15, cookie_path=None, content_type="all", i
                     active_post["shortCode"] = None
 
     try:
-        tmp_dir = os.path.join(tempfile.gettempdir(), f"scrapling_{int(time.time())}")
+        # Use a persistent temp dir per user to build trust with Instagram
+        tmp_dir = os.path.join(tempfile.gettempdir(), f"instainsight_{username}")
         StealthyFetcher.fetch(
             f"https://www.instagram.com/{username}/",
             headless=True,
             page_action=run_browser,
             user_data_dir=tmp_dir,
-            timeout=180000
+            timeout=180000,
+            solve_cloudflare=True,
+            google_search=True
         )
     except Exception as e:
         print(f"[Scrapling] Browser run failed: {e}", file=sys.stderr)
@@ -400,7 +435,7 @@ def scrape_instagram(username, count=15, cookie_path=None, content_type="all", i
         with open('pagination_info.json', 'w') as f:
             json.dump(last_page_info, f)
             
-    return res[:count]
+    return res[0:count]
 
 if __name__ == "__main__":
     u = sys.argv[1] if len(sys.argv) > 1 else ""
@@ -412,11 +447,26 @@ if __name__ == "__main__":
     
     existing_posts = set(existing_posts_arg.split(',')) if existing_posts_arg != "NONE" and existing_posts_arg else set()
     
-    print(json.dumps(scrape_instagram(
+    results = scrape_instagram(
         u,
         count=n,
         cookie_path=cookie_path,
         content_type=content_type,
         include_comments=include_comments,
         existing_posts=existing_posts
-    )))
+    )
+    
+    # Debug dump to local file as requested
+    try:
+        with open('scraped_data_debug.json', 'w', encoding='utf-8') as f:
+            json.dump({
+                "username": u,
+                "timestamp": time.ctime(),
+                "count": len(results),
+                "items": results
+            }, f, indent=2, ensure_ascii=False)
+        print(f"[Scrapling] Debug dump saved to scraped_data_debug.json", file=sys.stderr)
+    except Exception as e:
+        print(f"[Scrapling] Failed to save debug dump: {e}", file=sys.stderr)
+
+    print(json.dumps(results))
