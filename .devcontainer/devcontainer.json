@@ -20,5 +20,7 @@
         5173,
         8090
     ],
-    "remoteUser": "root"
+    "remoteUser": "node",
+    "postCreateCommand": "npm install && python3 -m venv /home/node/venv && /home/node/venv/bin/pip install --upgrade pip uv && UV_CACHE_DIR=/tmp/uv-cache /home/node/venv/bin/uv pip install -r requirements.txt && /home/node/venv/bin/playwright install chromium && /home/node/venv/bin/patchright install chromium && /home/node/venv/bin/scrapling install",
+    "postStartCommand": ""
 }
