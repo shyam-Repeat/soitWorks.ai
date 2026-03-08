@@ -19,4 +19,5 @@ orjson
 httpx
 parsel
 camoufox
-
+#patchright install chromium
+#playwright install chromium

@@ -82,7 +82,13 @@ function computeBasicInsights(summaryData: any[], followers: number = 0, playboo
   // ── Aggregates (what the user asked for) ──────────────────────────────────
   const totalLikes = summaryData.reduce((s, p) => s + (p.like_count || 0), 0);
   const totalComments = summaryData.reduce((s, p) => s + (p.comments_count || 0), 0);
-  const totalViews = summaryData.reduce((s, p) => s + (p.view_count || 0), 0);
+  const effectiveViewsOf = (p: any) => {
+    const directViews = Number(p.view_count || 0);
+    if (directViews > 0) return directViews;
+    // Image posts do not expose view_count reliably, so use likes as reach proxy.
+    return Number(p.like_count || 0);
+  };
+  const totalViews = summaryData.reduce((s, p) => s + effectiveViewsOf(p), 0);
   const totalInteractions = totalLikes + totalComments;
 
   const avgLikes = Math.round(totalLikes / total);
@@ -140,7 +146,7 @@ function computeBasicInsights(summaryData: any[], followers: number = 0, playboo
 
   // ── Viral Potential (% of posts > 2x average engagement) ──────────────────
   const avgEngAcrossPosts = (totalLikes + totalComments) / total;
-  const viralPostsCount = summaryData.filter(p => p.view_count > (avgViews * 1.5)).length;
+  const viralPostsCount = summaryData.filter(p => effectiveViewsOf(p) > (avgViews * 1.5)).length;
   const viralPotential = Math.min(100, Math.round((viralPostsCount / total) * 100));
 
   // ── Best Posting Hour (Avg Engagement per Hour) ──────────────────────────
@@ -1024,3 +1030,4 @@ BE SPECIFIC TO THIS STORE. NO PLACEHOLDERS.`;
 }
 
 startServer();
+

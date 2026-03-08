@@ -21,6 +21,10 @@
         8090
     ],
     "remoteUser": "node",
-    "postCreateCommand": "npm install && python3 -m venv /home/node/venv && /home/node/venv/bin/pip install --upgrade pip uv && UV_CACHE_DIR=/tmp/uv-cache /home/node/venv/bin/uv pip install -r requirements.txt && /home/node/venv/bin/playwright install chromium && /home/node/venv/bin/patchright install chromium && /home/node/venv/bin/scrapling install",
-    "postStartCommand": ""
+    "postCreateCommand": "bash .devcontainer/setup.sh",
+    "postStartCommand": "bash .devcontainer/setup.sh",
+    "remoteEnv": {
+        "PLAYWRIGHT_BROWSERS_PATH": "/workspaces/.playwright-browsers",
+        "PATH": "/home/node/venv/bin:${containerEnv:PATH}"
+    }
 }

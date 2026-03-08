@@ -22,5 +22,5 @@ RUN apt-get update && apt-get install -y unzip wget curl \
     && rm pocketbase_0.22.10_linux_amd64.zip \
     && rm -rf /var/lib/apt/lists/*
 
-ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
-RUN mkdir -p /home/node/.cache/ms-playwright && chown -R node:node /home/node/.cache/ms-playwright
+ENV PLAYWRIGHT_BROWSERS_PATH=/workspaces/.playwright-browsers
+RUN mkdir -p /workspaces/.playwright-browsers
