@@ -5,6 +5,7 @@ import { defineConfig, loadEnv } from 'vite';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
+  const isCodespaces = Boolean(process.env.CODESPACES) || Boolean(process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN);
   return {
     plugins: [react(), tailwindcss()],
     define: {
@@ -19,7 +20,8 @@ export default defineConfig(({ mode }) => {
       watch: {
         ignored: ['**/pb_data/**', '**/pb_migrations/**', '**/pagination_info.json', '**/raw_data_debug.json', '**/raw_instagram_response.json', '**/test_output.json', '**/scraped_data_debug.json', '**/raw_data_debug.json', '**/src/**/*.py']
       },
-      hmr: process.env.DISABLE_HMR !== 'true',
+      // Codespaces/forwarded ports frequently drop Vite HMR websockets and spam client errors.
+      hmr: isCodespaces ? false : process.env.DISABLE_HMR !== 'true',
       host: true,
       allowedHosts: ['unheard-kora-birefringent.ngrok-free.dev']
     },

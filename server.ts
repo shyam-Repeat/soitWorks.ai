@@ -616,8 +616,25 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
     const { username, contentType, enableAI, dryRun, existingPosts = [] } = req.body;
     const count = 30; // Hardcoded default as per v4.md requirements
     if (!username) return res.status(400).json({ error: "Username is required" });
+    let streamedBasic = false;
+    let heartbeat: NodeJS.Timeout | null = null;
+    const sendChunk = (payload: any) => {
+      if (!res.writableEnded) {
+        res.write(JSON.stringify(payload) + "\n");
+      }
+    };
 
     try {
+      // Start streaming immediately so long scrape/fallback runs do not get dropped by proxy idle timeouts.
+      res.setHeader("Content-Type", "application/x-ndjson");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
+      res.setHeader("Connection", "keep-alive");
+      (res as any).flushHeaders?.();
+      sendChunk({ type: "progress", stage: "scrape_started", username });
+      heartbeat = setInterval(() => {
+        sendChunk({ type: "keepalive", ts: Date.now() });
+      }, 10000);
+
       // ── STEP 1: Scrape latest content ──
       // Consolidate into ONE call with includeComments=true to avoid double browser launch 
       const existingPostIds = existingPosts.map((p: any) => p.shortCode || p.id).filter(Boolean);
@@ -627,11 +644,14 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
       const items = await scrapeInstagramProfile(username, contentType, count, true, existingPostIds);
 
       if ((!items || items.length === 0) && existingPosts.length === 0) {
-        return res.status(404).json({
+        if (heartbeat) clearInterval(heartbeat);
+        sendChunk({
+          type: "error",
           error: "No posts found or profile is private.",
           details: "The scraper couldn't find any recent posts for this username.",
           suggestion: "Check that the account is public and the username is correct.",
         });
+        return res.end();
       }
 
       // Profile extraction
@@ -678,8 +698,7 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
       const basicInsights = computeBasicInsights(summaryData, fCount, playbook);
       
       // Stream the response back
-      res.setHeader("Content-Type", "application/x-ndjson");
-      res.write(JSON.stringify({
+      sendChunk({
         type: "basic",
         data: {
           user: userProfile,
@@ -690,11 +709,13 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
             rawItems: items.length
           }
         }
-      }) + "\n");
+      });
+      streamedBasic = true;
 
       // ── STEP 4: AI Strategic Analysis ───────────────────────────────────
       if (enableAI === false) {
         console.log("[AI] Skipping AI analysis as requested by user.");
+        if (heartbeat) clearInterval(heartbeat);
         return res.end();
       }
 
@@ -789,7 +810,7 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
 `;
 
       if (dryRun) {
-        res.write(JSON.stringify({
+        sendChunk({
           type: "ai",
           data: {
             insights: aiInsightsBase,
@@ -799,7 +820,8 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
               usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
             }
           }
-        }) + "\n");
+        });
+        if (heartbeat) clearInterval(heartbeat);
         return res.end();
       }
 
@@ -822,7 +844,7 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
         if (aiInsights.action_cards) finalInsights.action_cards = aiInsights.action_cards;
       }
 
-      res.write(JSON.stringify({
+      sendChunk({
         type: "ai",
         data: {
           insights: finalInsights,
@@ -832,12 +854,14 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
             usage: aiUsage
           }
         }
-      }) + "\n");
+      });
 
+      if (heartbeat) clearInterval(heartbeat);
       return res.end();
 
     } catch (error: any) {
       console.error("[Error]", error);
+      if (heartbeat) clearInterval(heartbeat);
       if (!res.headersSent) {
         return res.status(500).json({
           error: "Analysis failed",
@@ -845,7 +869,11 @@ Return your analysis as JSON with keys: PROMPT, NEGATIVE_PROMPT`;
           suggestion: "Verify API keys and try again.",
         });
       } else {
-        res.write(JSON.stringify({ type: "error", error: "Analysis failed", details: error.message }) + "\n");
+        // If we already streamed usable basic data, don't send a terminal error chunk.
+        // This preserves successful scrape/fallback results in the UI.
+        if (!streamedBasic) {
+          res.write(JSON.stringify({ type: "error", error: "Analysis failed", details: error.message }) + "\n");
+        }
         return res.end();
       }
     }
@@ -1030,4 +1058,3 @@ BE SPECIFIC TO THIS STORE. NO PLACEHOLDERS.`;
 }
 
 startServer();
-

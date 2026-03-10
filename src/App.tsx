@@ -229,6 +229,7 @@ export default function App() {
     setLoadingStage('Analyzing Social Intelligence...');
     setError(null);
 
+    let hasBasicData = false;
     try {
       const res = await fetch('/api/insights', {
         method: 'POST',
@@ -261,11 +262,23 @@ export default function App() {
 
           for (const line of lines) {
             if (line.trim()) {
-              const chunk = JSON.parse(line);
+              let chunk: any;
+              try {
+                chunk = JSON.parse(line);
+              } catch (parseErr) {
+                // Ignore malformed stream lines so partial-success responses are not dropped.
+                console.warn("[Stream] Skipping malformed NDJSON chunk:", parseErr);
+                continue;
+              }
               if (chunk.type === "error") {
-                throw new Error(chunk.details || chunk.error);
+                if (!hasBasicData) {
+                  throw new Error(chunk.details || chunk.error);
+                }
+                console.warn("[Stream] Backend reported late error after basic data:", chunk.details || chunk.error);
+                continue;
               } else if (chunk.type === "basic") {
                 setData(chunk.data);
+                hasBasicData = true;
                 setLoading(false);
                 setActiveTab('dashboard');
                 if (enableAI) {
@@ -306,12 +319,17 @@ export default function App() {
       }
     } catch (err: any) {
       console.error("Analysis error:", err);
-      setError({
-        message: err.message || 'Quantum Connection Error',
-        details: err.details || (err instanceof Error ? err.message : String(err)),
-        suggestion: err.suggestion || "Ensure target profile is public and retry."
-      });
+      if (!hasBasicData) {
+        setError({
+          message: err.message || 'Quantum Connection Error',
+          details: err.details || (err instanceof Error ? err.message : String(err)),
+          suggestion: err.suggestion || "Ensure target profile is public and retry."
+        });
+      } else {
+        console.warn("[Search] Non-blocking error after partial data:", err);
+      }
       setLoading(false);
+      setAiLoading(false);
       setLoadingStage('');
     }
   };
