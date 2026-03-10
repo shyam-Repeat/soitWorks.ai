@@ -1042,37 +1042,46 @@ def scrape_instagram(username, count=20, cookie_path=None, content_type="all", i
     return res[0:count]
 
 if __name__ == "__main__":
-    u = sys.argv[1] if len(sys.argv) > 1 else ""
-    cookie_path = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != "NONE" else None
-    content_type = sys.argv[3] if len(sys.argv) > 3 else "all"
-    n = int(sys.argv[4]) if len(sys.argv) > 4 else 12
-    include_comments = sys.argv[5] != "0" if len(sys.argv) > 5 else True
-    existing_posts_arg = sys.argv[6] if len(sys.argv) > 6 else "NONE"
-    scrape_mode = sys.argv[7] if len(sys.argv) > 7 else "advanced"
-    
-    existing_posts = set(existing_posts_arg.split(',')) if existing_posts_arg != "NONE" and existing_posts_arg else set()
-    
-    results = scrape_instagram(
-        u,
-        count=n,
-        cookie_path=cookie_path,
-        content_type=content_type,
-        include_comments=include_comments,
-        existing_posts=existing_posts,
-        scrape_mode=scrape_mode
-    )
-    
-    # Debug dump to local file as requested
     try:
-        with open('scraped_data_debug.json', 'w', encoding='utf-8') as f:
-            json.dump({
-                "username": u,
-                "timestamp": time.ctime(),
-                "count": len(results),
-                "items": results
-            }, f, indent=2, ensure_ascii=False)
-        print(f"[Scrapling] Debug dump saved to scraped_data_debug.json", file=sys.stderr)
-    except Exception as e:
-        print(f"[Scrapling] Failed to save debug dump: {e}", file=sys.stderr)
+        u = sys.argv[1] if len(sys.argv) > 1 else ""
+        cookie_path = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != "NONE" else None
+        content_type = sys.argv[3] if len(sys.argv) > 3 else "all"
+        try:
+            n = int(sys.argv[4]) if len(sys.argv) > 4 else 12
+        except (TypeError, ValueError):
+            n = 12
+        include_comments = sys.argv[5] != "0" if len(sys.argv) > 5 else True
+        existing_posts_arg = sys.argv[6] if len(sys.argv) > 6 else "NONE"
+        scrape_mode = sys.argv[7] if len(sys.argv) > 7 else "advanced"
 
-    print(json.dumps(results))
+        existing_posts = set(existing_posts_arg.split(',')) if existing_posts_arg != "NONE" and existing_posts_arg else set()
+
+        results = scrape_instagram(
+            u,
+            count=n,
+            cookie_path=cookie_path,
+            content_type=content_type,
+            include_comments=include_comments,
+            existing_posts=existing_posts,
+            scrape_mode=scrape_mode
+        )
+
+        # Debug dump to local file as requested
+        try:
+            with open('scraped_data_debug.json', 'w', encoding='utf-8') as f:
+                json.dump({
+                    "username": u,
+                    "timestamp": time.ctime(),
+                    "count": len(results),
+                    "items": results
+                }, f, indent=2, ensure_ascii=False)
+            print(f"[Scrapling] Debug dump saved to scraped_data_debug.json", file=sys.stderr)
+        except Exception as e:
+            print(f"[Scrapling] Failed to save debug dump: {e}", file=sys.stderr)
+
+        print(json.dumps(results))
+    except Exception as e:
+        # Do not crash the process on scraper-side failures.
+        # Returning [] allows the Node layer to trigger Apify fallback reliably.
+        print(f"[Scrapling] Fatal error at entrypoint: {e}", file=sys.stderr)
+        print("[]")
