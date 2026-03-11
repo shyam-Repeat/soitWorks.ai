@@ -383,6 +383,42 @@ async function startServer() {
   app.use(express.json({ limit: "100mb" }));
   app.use(express.urlencoded({ limit: "100mb", extended: true }));
 
+  const fallbackOrigins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173"
+  ];
+  const envOrigins = (process.env.ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  const optionalOrigins = [process.env.APP_URL, process.env.FRONTEND_URL].filter(Boolean);
+  const corsAllowList = new Set([...fallbackOrigins, ...envOrigins, ...optionalOrigins]);
+  const allowAllOrigins = process.env.ALLOW_EVERYONE === "1" || corsAllowList.size === 0;
+
+  const handleCors = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const origin = req.headers.origin;
+    if (!origin) {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+    } else if (allowAllOrigins || corsAllowList.has(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+    } else {
+      console.warn(`[CORS] Blocked origin: ${origin}`);
+      res.setHeader("Access-Control-Allow-Origin", "null");
+    }
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept");
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    if (req.method === "OPTIONS") {
+      return res.sendStatus(204);
+    }
+    next();
+  };
+
+  app.use(handleCors);
+
   // ─── Auth Endpoints ───────────────────────────────────────────────────────
 
   app.post("/api/auth/register", async (req, res) => {
