@@ -9,8 +9,8 @@ import { scanBuyerIntent } from "./utils/buyerIntentScanner.js";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { GoogleGenAI, SubjectReferenceImage, SubjectReferenceType } from "@google/genai";
 
-// PocketBase
-import { registerUser, loginUser, validateToken } from "./lib/pocketbase.js";
+// Supabase
+import { registerUser, loginUser, validateToken } from "./lib/supabase.js";
 import {
   saveProfile, savePosts, saveComments, saveAnalysis,
   getAnalyses, getPostRecordId,
