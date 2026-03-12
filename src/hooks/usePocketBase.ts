@@ -1,6 +1,6 @@
 /**
  * usePocketBase.ts
- * React hook for PocketBase authentication.
+ * React hook for the backend authentication endpoints (Supabase-backed).
  * Token stored in localStorage, validated on app load.
  */
 
