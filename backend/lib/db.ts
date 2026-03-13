@@ -42,6 +42,39 @@ const stringifyIfNeeded = (value: any) => {
   return JSON.stringify(value);
 };
 
+const normalizeTextArray = (value: string[] | string | null | undefined): string[] => {
+  if (!value) return [];
+
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => (typeof item === "string" ? item : item?.toString() || ""))
+      .filter((item) => item.trim().length > 0);
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((item) => (typeof item === "string" ? item : item?.toString() || ""))
+          .filter((item) => item.trim().length > 0);
+      }
+    } catch {
+      // Ignore JSON parse failure and fall back to comma-splitting below.
+    }
+
+    return trimmed
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+  }
+
+  return [];
+};
+
 // ─── Profile Operations ───────────────────────────────────────────────────────
 
 export interface ProfileData {
@@ -117,8 +150,8 @@ export async function savePosts(userId: string, profileId: string, posts: PostDa
       user_id: userId,
       profile_id: profileId,
       ...post,
-      hashtags: stringifyIfNeeded(post.hashtags),
-      tagged_users: stringifyIfNeeded(post.tagged_users),
+      hashtags: normalizeTextArray(post.hashtags),
+      tagged_users: normalizeTextArray(post.tagged_users),
       music_info: stringifyIfNeeded(post.music_info),
     };
   });
