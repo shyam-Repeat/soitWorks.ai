@@ -379,7 +379,7 @@ function buildSummaryData(normalizedPosts: any[]) {
 // ─── Express Server ───────────────────────────────────────────────────────────
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
   app.use(express.json({ limit: "100mb" }));
   app.use(express.urlencoded({ limit: "100mb", extended: true }));
 
@@ -493,22 +493,29 @@ async function startServer() {
       console.log("#################################################\n");
 
       // 2. Save posts (smart aggregation)
+      const toCount = (value: any) => {
+        const num = Number(value);
+        if (Number.isFinite(num)) return Math.round(num);
+        const parsed = typeof value === "string" ? Number(value.replace(/,/g, "")) : NaN;
+        return Number.isFinite(parsed) ? Math.round(parsed) : 0;
+      };
+
       const pbPosts: PostData[] = postsData.map((p: any) => ({
         ig_post_id: p.id || p.shortCode || "",
         short_code: p.shortCode || "",
         type: p.type || "Image",
         caption: (p.caption || "").substring(0, 5000),
-        likes_count: p.likesCount || p.likes_count || 0,
-        comments_count: p.commentsCount || p.comments_count || 0,
-        video_view_count: p.videoViewCount || p.video_view_count || 0,
-        play_count: p.playCount || p.play_count || 0,
-        save_count: p.saveCount || p.save_count || 0,
-        share_count: p.shareCount || p.share_count || 0,
+        likes_count: toCount(p.likesCount ?? p.likes_count),
+        comments_count: toCount(p.commentsCount ?? p.comments_count),
+        video_view_count: toCount(p.videoViewCount ?? p.video_view_count),
+        play_count: toCount(p.playCount ?? p.play_count),
+        save_count: toCount(p.saveCount ?? p.save_count),
+        share_count: toCount(p.shareCount ?? p.share_count),
         display_url: p.displayUrl || p.display_url || "",
         timestamp: p.timestamp || "",
         hashtags: p.hashtags || [],
         url: p.url || "",
-        duration: p.videoDuration || p.duration || 0,
+        duration: toCount(p.videoDuration ?? p.duration),
         music_info: p.music_info || null,
         tagged_users: p.tagged_users || [],
       }));
